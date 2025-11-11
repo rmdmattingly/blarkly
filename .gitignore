@@ -1,0 +1,13 @@
+# macOS cruft
+.DS_Store
+
+# Firebase CLI cache + logs
+.firebase/
+firebase-debug.log
+
+# Dependency installs
+node_modules/
+
+# Build artifacts
+frontend/build/
+functions/lib/

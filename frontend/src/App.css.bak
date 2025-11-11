@@ -1,0 +1,291 @@
+:root {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #0f172a;
+  background-color: #f8fafc;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #f8fafc;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.Home,
+.Session {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1.5rem;
+}
+
+.Home-card,
+.Session {
+  width: min(640px, 100%);
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+}
+
+.Home-card h1 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.Home-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.Home-form label {
+  font-weight: 600;
+}
+
+.Home-form input {
+  font-size: 1rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #cbd5f5;
+}
+
+.Home-form button {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.75rem;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #2563eb;
+  color: #fff;
+  transition: background 0.2s ease-in-out;
+}
+
+.Home-form button:disabled {
+  background: #94a3b8;
+  cursor: progress;
+}
+
+.Home-error {
+  color: #dc2626;
+  margin-top: 1rem;
+}
+
+.Session-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.Session-playerList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.Session-player {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.Session-player.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.Session-playerHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.Session-playerMeta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.Session-pill {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.75rem;
+}
+
+section {
+  margin-top: 1.5rem;
+}
+
+.Session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.Session-actions button {
+  flex: 1;
+  min-width: 140px;
+  padding: 0.75rem 1rem;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: #2563eb;
+  color: #fff;
+  transition: background 0.2s ease-in-out, transform 0.1s ease-in-out;
+}
+
+.Session-actions button:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.Session-error {
+  color: #dc2626;
+  margin-top: 0.75rem;
+}
+
+.Session-summary {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
+.Session-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.Session-statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.Session-status--online {
+  color: #16a34a;
+}
+
+.Session-statusDot--online {
+  background: #16a34a;
+}
+
+.Session-status--offline {
+  color: #475569;
+}
+
+.Session-statusDot--offline {
+  background: #94a3b8;
+}
+
+.Session-notice {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid #2563eb;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.Session-complete {
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border-radius: 12px;
+  border: 1px dashed #cbd5f5;
+  text-align: center;
+  background: #f8fafc;
+}
+
+.Session-complete button {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 10px;
+  border: none;
+  background: #16a34a;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.Session-complete button:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+.Session-log {
+  margin-top: 1.5rem;
+}
+
+.Session-log ul {
+  margin: 0;
+  padding: 0.75rem;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.Session-log li {
+  display: flex;
+  gap: 0.5rem;
+  color: #475569;
+}
+
+.Session-logTime {
+  color: #94a3b8;
+  min-width: 72px;
+  font-weight: 600;
+}
+
+.log-guess {
+  color: #0f172a;
+}
+
+.log-turn {
+  color: #2563eb;
+}
+
+.log-connect {
+  color: #16a34a;
+}
+
+.log-disconnect {
+  color: #dc2626;
+}
+
+.log-system {
+  color: #0f172a;
+  font-style: italic;
+}

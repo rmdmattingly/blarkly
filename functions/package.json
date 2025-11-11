@@ -1,0 +1,29 @@
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "description": "Blarkly Cloud Functions",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf lib",
+    "deploy": "npm run build && firebase deploy --only functions",
+    "lint": "eslint . --ext .ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "firebase-admin": "12.7.0",
+    "firebase-functions": "6.2.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "22.10.2",
+    "firebase-functions-test": "^3.4.1",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
