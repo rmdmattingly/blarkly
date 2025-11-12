@@ -2,16 +2,22 @@ import { useEffect } from 'react';
 
 import { reportPresence } from '../api/highlow';
 
-const HEARTBEAT_INTERVAL_MS = 20_000;
+type PresenceReporter = (playerName: string, isOnline: boolean) => Promise<void>;
 
-export const usePresence = (playerName: string | null, enabled: boolean): void => {
+const HEARTBEAT_INTERVAL_MS = 6_000;
+
+export const usePresence = (
+  playerName: string | null,
+  enabled: boolean,
+  reporter: PresenceReporter = reportPresence
+): void => {
   useEffect(() => {
     if (!playerName || !enabled) {
       return;
     }
 
     const sendPresence = (online: boolean) => {
-      void reportPresence(playerName, online).catch((error) => {
+      void reporter(playerName, online).catch((error) => {
         console.error('Presence update failed', error);
       });
     };
@@ -30,5 +36,5 @@ export const usePresence = (playerName: string | null, enabled: boolean): void =
       window.clearInterval(intervalId);
       sendPresence(false);
     };
-  }, [playerName, enabled]);
+  }, [playerName, enabled, reporter]);
 };

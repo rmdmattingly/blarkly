@@ -5,6 +5,8 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
+export * from './models/highlow';
+
 const db = admin.firestore();
 if (typeof (db as FirebaseFirestore.Firestore & { settings?: (options: object) => void }).settings === 'function') {
   (db as FirebaseFirestore.Firestore & { settings: (options: object) => void }).settings({
@@ -18,6 +20,14 @@ const GAMES_COLLECTION = 'games';
 const HIGH_LOW_DOC = 'highlow';
 const SESSIONS_SUBCOLLECTION = 'sessions';
 const CURRENT_SESSION_ID = 'current';
+const OLD_MAID_DOC = 'oldmaid';
+const OLD_MAID_CURRENT_SESSION_ID = 'current';
+const TURN_TIMEOUT_SECONDS = 180;
+const STALE_PLAYER_SECONDS = 60;
+const WAITING_ROOM_PLAYER_SECONDS = 5 * 60;
+const IDLE_WARNING_BUFFER_SECONDS = 30;
+const STALE_GAME_SECONDS = 60 * 60;
+const STALLED_ACTIVE_OLD_MAID_SECONDS = 5 * 60;
 
 type FirestoreTimestamp = FirebaseFirestore.Timestamp;
 type TimestampLike = FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
@@ -25,9 +35,9 @@ type TimestampLike = FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
 export type GuessChoice = 'higher' | 'lower';
 
 export interface Card {
-  rank: number; // 1 (Ace) .. 13 (King); Aces are low
-  suit: 'hearts' | 'diamonds' | 'clubs' | 'spades';
-  label: string; // e.g., "A♠", "Q♥", "10♦"
+  rank: number; // 0 (Joker) .. 13 (King); Aces are low
+  suit: 'hearts' | 'diamonds' | 'clubs' | 'spades' | 'joker';
+  label: string; // e.g., "A♠", "Q♥", "10♦", "🃏"
 }
 
 export interface Player {
@@ -35,39 +45,87 @@ export interface Player {
   displayName?: string; // optional casing for UI
   isActive: boolean;
   isOnline: boolean;
-  pile: Card[];
 }
 
 type PlayerWrite = Player;
 
 type PlayerLastSeenMap<TTimestamp> = Record<string, TTimestamp>;
 
+export interface TablePile {
+  id: string;
+  row: number;
+  column: number;
+  cards: Card[];
+  isFaceUp: boolean;
+}
+
+type GameOutcome = 'players' | 'deck' | null;
+
 export interface GameSession {
   id: string;
   players: Player[];
   deck: Card[];
+  piles: TablePile[];
   turnIndex: number;
+  turnStartedAt: FirestoreTimestamp;
   status: 'waiting' | 'active' | 'complete';
   settings: { acesHigh: false };
   createdAt: FirestoreTimestamp;
   updatedAt: FirestoreTimestamp;
   playerLastSeen: PlayerLastSeenMap<FirestoreTimestamp>;
+  outcome: GameOutcome;
 }
 
 export interface GuessResult {
   correct: boolean;
   drawnCard: Card;
+  drawnCards: Card[];
+  pileId: string;
+  pileFaceUp: boolean;
   nextPlayer: string | null;
   remainingCards: number;
+  outcome: GameOutcome;
 }
 
 type GameSessionRecord = Omit<GameSession, 'id'>;
-type GameSessionWrite = Omit<GameSessionRecord, 'players' | 'createdAt' | 'updatedAt' | 'playerLastSeen'> & {
+type GameSessionWrite = Omit<
+  GameSessionRecord,
+  'players' | 'createdAt' | 'updatedAt' | 'playerLastSeen' | 'turnStartedAt'
+> & {
   players: PlayerWrite[];
   createdAt: TimestampLike;
   updatedAt: TimestampLike;
   playerLastSeen: PlayerLastSeenMap<TimestampLike>;
+  turnStartedAt: TimestampLike;
 };
+
+interface OldMaidPairRecord {
+  cards: Card[];
+}
+
+interface OldMaidPlayer {
+  name: string;
+  displayName?: string;
+  hand: Card[];
+  discards: OldMaidPairRecord[];
+  isOnline: boolean;
+  isSafe: boolean;
+  idleWarning?: boolean;
+}
+
+type OldMaidPlayerWrite = OldMaidPlayer;
+
+type OldMaidSessionStatus = 'waiting' | 'active' | 'complete';
+
+interface OldMaidSessionRecord {
+  status: OldMaidSessionStatus;
+  players: OldMaidPlayerWrite[];
+  turnIndex: number;
+  createdAt: TimestampLike;
+  updatedAt: TimestampLike;
+  loser?: string | null;
+  playerLastSeen?: PlayerLastSeenMap<TimestampLike>;
+}
 
 export interface GameLogEntry {
   timestamp: FirestoreTimestamp | TimestampLike;
@@ -88,12 +146,18 @@ type PresenceTransactionResponse =
   | { success: true; logs: LogQueueEntry[] }
   | { success: false; error: string; logs: LogQueueEntry[] };
 
-const SUITS: Array<{ suit: Card['suit']; symbol: string }> = [
+const SUITS: Array<{ suit: Exclude<Card['suit'], 'joker'>; symbol: string }> = [
   { suit: 'hearts', symbol: '♥' },
   { suit: 'diamonds', symbol: '♦' },
   { suit: 'clubs', symbol: '♣' },
   { suit: 'spades', symbol: '♠' },
 ];
+
+const JOKER_CARD: Card = {
+  rank: 0,
+  suit: 'joker',
+  label: '🃏',
+};
 
 const RANK_LABELS: Record<number, string> = {
   1: 'A',
@@ -108,6 +172,32 @@ const rankToLabel = (rank: number): string => {
   }
   return rank.toString();
 };
+
+const GRID_ROWS = 3;
+const GRID_COLUMNS = 3;
+const TOTAL_PILES = GRID_ROWS * GRID_COLUMNS;
+
+const EMOJI_EFFECTS = {
+  thumbs_up: { label: 'Thumbs up', symbol: '👍' },
+  laughing: { label: 'Laughing', symbol: '😂' },
+  crying: { label: 'Crying', symbol: '😭' },
+  sweating: { label: 'Sweating', symbol: '😅' },
+  uhoh: { label: 'Uh oh', symbol: '🫠' },
+  thinking: { label: 'Thinking', symbol: '🤔' },
+  angry: { label: 'Angry', symbol: '😡' },
+  high_five: { label: 'High five', symbol: '✋' },
+} as const;
+
+type EmojiEffectKey = keyof typeof EMOJI_EFFECTS;
+
+interface EmojiEffectEntry {
+  emoji: EmojiEffectKey;
+  label: string;
+  symbol: string;
+  player: string;
+  displayName?: string;
+  timestamp: TimestampLike;
+}
 
 export const generateDeck = (): Card[] => {
   const cards: Card[] = [];
@@ -129,6 +219,20 @@ export const shuffle = <T>(arr: T[]): T[] => {
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
+};
+
+const createInitialPilesState = () => {
+  const shuffled = shuffle(generateDeck());
+  const initialCards = shuffled.slice(0, TOTAL_PILES);
+  const remainingDeck = shuffled.slice(TOTAL_PILES);
+  const piles: TablePile[] = initialCards.map((card, index) => ({
+    id: `pile-${index}`,
+    row: Math.floor(index / GRID_COLUMNS),
+    column: index % GRID_COLUMNS,
+    cards: [card],
+    isFaceUp: true,
+  }));
+  return { deck: remainingDeck, piles };
 };
 
 const compareCards = (previous: Card, next: Card): number => {
@@ -169,7 +273,6 @@ const normalizePlayerList = (players?: Player[] | PlayerWrite[]) => {
       displayName,
       isActive: typeof player.isActive === 'boolean' ? player.isActive : true,
       isOnline: typeof player.isOnline === 'boolean' ? player.isOnline : true,
-      pile: Array.isArray(player.pile) ? [...player.pile] : [],
     };
   });
   return { players: normalized, changed };
@@ -182,11 +285,18 @@ const findPlayerIndex = (players: PlayerWrite[], playerName: string): number => 
 const findNextEligibleIndex = (
   players: PlayerWrite[],
   currentIndex: number,
-  options?: { requireOnline?: boolean }
+  options?: { requireOnline?: boolean; seed?: number }
 ): number | null => {
   const requireOnline = options?.requireOnline ?? false;
   if (!players.length) {
     return null;
+  }
+  if (typeof options?.seed === 'number') {
+    const seededIndex = options.seed % players.length;
+    const player = players[seededIndex];
+    if (player?.isActive && (!requireOnline || player.isOnline)) {
+      return seededIndex;
+    }
   }
   for (let offset = 1; offset <= players.length; offset += 1) {
     const candidate = (currentIndex + offset) % players.length;
@@ -220,6 +330,204 @@ const ensureTurnIndex = (
   return findNextEligibleIndex(players, normalizedIndex, options);
 };
 
+const pruneStaleHighLowPlayers = (
+  players: PlayerWrite[],
+  lastSeenMap: PlayerLastSeenMap<TimestampLike> | undefined,
+  nowSeconds: number
+): { filtered: PlayerWrite[]; removed: string[] } => {
+  if (!players.length) {
+    return { filtered: [], removed: [] };
+  }
+  const filtered: PlayerWrite[] = [];
+  const removed: string[] = [];
+  players.forEach((player) => {
+    const lastSeenSeconds = resolveLastSeenSeconds(lastSeenMap?.[player.name]);
+    if (lastSeenSeconds == null) {
+      removed.push(player.name);
+      return;
+    }
+    const secondsAgo = nowSeconds - lastSeenSeconds;
+    if (secondsAgo > STALE_PLAYER_SECONDS) {
+      removed.push(player.name);
+      return;
+    }
+    const updatedPlayer = { ...player, isOnline: secondsAgo <= STALE_PLAYER_SECONDS };
+    filtered.push(updatedPlayer);
+  });
+  return { filtered, removed };
+};
+
+const prunePlayersInTransaction = (
+  sessionRef: FirebaseFirestore.DocumentReference,
+  transaction: FirebaseFirestore.Transaction,
+  sessionData: GameSessionRecord,
+  players: PlayerWrite[]
+): { players: PlayerWrite[]; removed: string[] } => {
+  const nowSeconds = admin.firestore.Timestamp.now().seconds;
+  const { filtered, removed } = pruneStaleHighLowPlayers(players, sessionData.playerLastSeen, nowSeconds);
+  if (removed.length) {
+    const updatedLastSeen = { ...(sessionData.playerLastSeen ?? {}) };
+    removed.forEach((name) => {
+      delete updatedLastSeen[name];
+    });
+    transaction.update(sessionRef, {
+      players: filtered,
+      playerLastSeen: updatedLastSeen,
+      updatedAt: serverTimestamp(),
+    });
+    sessionData.playerLastSeen = updatedLastSeen;
+  }
+  return { players: filtered, removed };
+};
+
+const prunePlayersWithoutTransaction = async (
+  sessionRef: FirebaseFirestore.DocumentReference,
+  sessionData: GameSessionRecord,
+  players: PlayerWrite[]
+): Promise<{ players: PlayerWrite[]; removed: string[] }> => {
+  const nowSeconds = admin.firestore.Timestamp.now().seconds;
+  const { filtered, removed } = pruneStaleHighLowPlayers(players, sessionData.playerLastSeen, nowSeconds);
+  if (removed.length) {
+    const updatedLastSeen = { ...(sessionData.playerLastSeen ?? {}) };
+    removed.forEach((name) => {
+      delete updatedLastSeen[name];
+    });
+    await sessionRef.update({
+      players: filtered,
+      playerLastSeen: updatedLastSeen,
+      updatedAt: serverTimestamp(),
+    });
+    sessionData.playerLastSeen = updatedLastSeen;
+  }
+  return { players: filtered, removed };
+};
+
+const refreshHighLowIfIdle = (
+  sessionRef: FirebaseFirestore.DocumentReference,
+  transaction: FirebaseFirestore.Transaction,
+  sessionData: GameSessionRecord
+) => {
+  const nowTimestamp = admin.firestore.Timestamp.now();
+  const updatedAtSeconds = getTimestampSeconds(sessionData.updatedAt as TimestampLike);
+  if (updatedAtSeconds && nowTimestamp.seconds - updatedAtSeconds <= STALE_GAME_SECONDS) {
+    return;
+  }
+  const { deck, piles } = createInitialPilesState();
+  transaction.update(sessionRef, {
+    players: [],
+    playerLastSeen: {},
+    deck,
+    piles,
+    turnIndex: 0,
+    turnStartedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    status: 'waiting',
+    outcome: null,
+  });
+  sessionData.players = [];
+  sessionData.playerLastSeen = {};
+  sessionData.deck = deck;
+  sessionData.piles = piles;
+  sessionData.turnIndex = 0;
+  sessionData.turnStartedAt = nowTimestamp;
+  sessionData.updatedAt = nowTimestamp;
+  sessionData.status = 'waiting';
+  sessionData.outcome = null;
+};
+
+const refreshOldMaidIfIdle = (
+  sessionRef: FirebaseFirestore.DocumentReference,
+  transaction: FirebaseFirestore.Transaction,
+  sessionData: OldMaidSessionRecord
+) => {
+  const nowTimestamp = admin.firestore.Timestamp.now();
+  const updatedAt = sessionData.updatedAt as TimestampLike | FirebaseFirestore.Timestamp | undefined;
+  const updatedAtSeconds = getTimestampSeconds(updatedAt);
+  const staleThreshold =
+    sessionData.status === 'active' ? STALLED_ACTIVE_OLD_MAID_SECONDS : STALE_GAME_SECONDS;
+  if (updatedAtSeconds && nowTimestamp.seconds - updatedAtSeconds <= staleThreshold) {
+    return;
+  }
+  transaction.update(sessionRef, {
+    status: 'waiting',
+    players: [],
+    turnIndex: 0,
+    updatedAt: serverTimestamp(),
+    loser: null,
+    playerLastSeen: {},
+  });
+  sessionData.status = 'waiting';
+  sessionData.players = [];
+  sessionData.turnIndex = 0;
+  sessionData.updatedAt = nowTimestamp;
+  sessionData.loser = null;
+  sessionData.playerLastSeen = {};
+};
+
+const pruneOldMaidPlayers = (
+  players: OldMaidPlayerWrite[],
+  lastSeenMap: PlayerLastSeenMap<TimestampLike> | undefined,
+  staleThresholdSeconds: number
+): { filtered: OldMaidPlayerWrite[]; removed: string[]; changed: boolean } => {
+  if (!players.length) {
+    return { filtered: [], removed: [], changed: false };
+  }
+  const nowSeconds = admin.firestore.Timestamp.now().seconds;
+  const filtered: OldMaidPlayerWrite[] = [];
+  const removed: string[] = [];
+  const warningThresholdSeconds = Math.max(10, staleThresholdSeconds - IDLE_WARNING_BUFFER_SECONDS);
+  let changed = false;
+  players.forEach((player) => {
+    const lastSeenSeconds = resolveLastSeenSeconds(lastSeenMap?.[player.name]);
+    if (lastSeenSeconds == null || nowSeconds - lastSeenSeconds > staleThresholdSeconds) {
+      removed.push(player.name);
+      return;
+    }
+    const idleElapsed = lastSeenSeconds == null ? null : nowSeconds - lastSeenSeconds;
+    const shouldWarn =
+      idleElapsed != null &&
+      idleElapsed >= warningThresholdSeconds &&
+      idleElapsed <= staleThresholdSeconds;
+    const existingWarning = Boolean(player.idleWarning);
+    if (existingWarning !== shouldWarn) {
+      changed = true;
+    }
+    filtered.push(shouldWarn === existingWarning ? player : { ...player, idleWarning: shouldWarn });
+  });
+  return { filtered, removed, changed };
+};
+
+const pruneOldMaidPlayersInTransaction = (
+  sessionRef: FirebaseFirestore.DocumentReference,
+  transaction: FirebaseFirestore.Transaction,
+  sessionData: OldMaidSessionRecord
+) => {
+  const staleThreshold =
+    sessionData.status === 'waiting' ? WAITING_ROOM_PLAYER_SECONDS : STALE_PLAYER_SECONDS;
+  const { filtered, removed, changed } = pruneOldMaidPlayers(
+    sessionData.players ?? [],
+    sessionData.playerLastSeen,
+    staleThreshold
+  );
+  if (!removed.length && !changed) {
+    return 0;
+  }
+  const updatedLastSeen = { ...(sessionData.playerLastSeen ?? {}) };
+  if (removed.length) {
+    removed.forEach((name) => {
+      delete updatedLastSeen[name];
+    });
+  }
+  transaction.update(sessionRef, {
+    players: filtered,
+    playerLastSeen: updatedLastSeen,
+    updatedAt: serverTimestamp(),
+  });
+  sessionData.players = filtered;
+  sessionData.playerLastSeen = updatedLastSeen;
+  return removed.length;
+};
+
 const updatePlayersIfChanged = async (
   sessionRef: FirebaseFirestore.DocumentReference,
   players: Player[] | PlayerWrite[],
@@ -235,6 +543,26 @@ const updatePlayersIfChanged = async (
     }
   }
   return normalized;
+};
+
+const resolveLastSeenSeconds = (entry?: TimestampLike): number | null => {
+  if (!entry) {
+    return null;
+  }
+  if (entry instanceof admin.firestore.Timestamp) {
+    return entry.seconds;
+  }
+  return null;
+};
+
+const getTimestampSeconds = (value?: TimestampLike | FirebaseFirestore.Timestamp): number | null => {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.seconds;
+  }
+  return null;
 };
 
 export const logGameEvent = async (
@@ -270,6 +598,69 @@ const flushLogEntries = async (entries: LogQueueEntry[]) => {
   for (const entry of entries) {
     await writeLogEntry(entry);
   }
+};
+
+const buildOldMaidBaseSession = (): OldMaidSessionRecord => ({
+  status: 'waiting',
+  players: [],
+  turnIndex: 0,
+  createdAt: serverTimestamp(),
+  updatedAt: serverTimestamp(),
+  loser: null,
+  playerLastSeen: {},
+});
+
+const buildOldMaidDeck = (): Card[] => {
+  const withoutQueenOfClubs = generateDeck().filter(
+    (card) => !(card.rank === 12 && card.suit === 'clubs')
+  );
+  return shuffle([...withoutQueenOfClubs, { ...JOKER_CARD }]);
+};
+
+const resolveOldMaidPairs = (hand: Card[]): { remaining: Card[]; pairs: OldMaidPairRecord[] } => {
+  const normalCards: Card[] = [];
+  const remaining: Card[] = [];
+  const pairs: OldMaidPairRecord[] = [];
+
+  hand.forEach((card) => {
+    if (card.suit === 'joker') {
+      remaining.push(card);
+    } else {
+      normalCards.push(card);
+    }
+  });
+
+  const byRank = normalCards.reduce((map, card) => {
+    const existing = map.get(card.rank) ?? [];
+    existing.push(card);
+    map.set(card.rank, existing);
+    return map;
+  }, new Map<number, Card[]>());
+
+  byRank.forEach((cards) => {
+    const stack = [...cards];
+    while (stack.length >= 2) {
+      pairs.push({ cards: [stack.pop() as Card, stack.pop() as Card] });
+    }
+    if (stack.length === 1) {
+      remaining.push(stack.pop() as Card);
+    }
+  });
+
+  return { remaining, pairs };
+};
+
+const findNextPlayerWithCards = (players: OldMaidPlayerWrite[], startIndex: number): number | null => {
+  if (!players.length) {
+    return null;
+  }
+  for (let offset = 1; offset <= players.length; offset += 1) {
+    const candidate = (startIndex + offset) % players.length;
+    if (players[candidate]?.hand.length) {
+      return candidate;
+    }
+  }
+  return null;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -316,6 +707,12 @@ const executeWithRetries = async <T>(
 const sessionsCollection = () =>
   db.collection(GAMES_COLLECTION).doc(HIGH_LOW_DOC).collection(SESSIONS_SUBCOLLECTION);
 
+const effectsCollection = () =>
+  sessionsCollection().doc(CURRENT_SESSION_ID).collection('effects');
+
+const oldMaidSessionsCollection = () =>
+  db.collection(GAMES_COLLECTION).doc(OLD_MAID_DOC).collection(SESSIONS_SUBCOLLECTION);
+
 interface CreateSessionRequest {
   playerName: string;
   displayName?: string;
@@ -339,11 +736,16 @@ interface JoinOrCreateSessionRequest {
 interface MakeGuessRequest {
   playerName: string;
   guess: GuessChoice;
+  pileId: string;
 }
 
 interface ReportPresenceRequest {
   playerName: string;
   isOnline: boolean;
+}
+
+interface ResolveTurnRequest {
+  playerName: string;
 }
 
 interface StartNewGameRequest {
@@ -352,6 +754,7 @@ interface StartNewGameRequest {
 
 const buildFreshSessionDocument = (playerName: string, displayName: string): GameSessionWrite => {
   const timestamp = serverTimestamp();
+  const { deck, piles } = createInitialPilesState();
   return {
     players: [
       {
@@ -359,16 +762,18 @@ const buildFreshSessionDocument = (playerName: string, displayName: string): Gam
         displayName,
         isActive: true,
         isOnline: true,
-        pile: [],
       },
     ],
-    deck: shuffle(generateDeck()),
+    deck,
+    piles,
     turnIndex: 0,
+    turnStartedAt: timestamp,
     status: 'waiting',
     settings: { acesHigh: false },
     playerLastSeen: {
       [playerName]: timestamp,
     },
+    outcome: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -443,7 +848,8 @@ export const joinHighLowSession = functions
         }
 
         const sessionData = snap.data() as GameSessionRecord;
-        const players = await updatePlayersIfChanged(sessionRef, sessionData.players);
+        let players = await updatePlayersIfChanged(sessionRef, sessionData.players);
+        ({ players } = await prunePlayersWithoutTransaction(sessionRef, sessionData, players));
 
         if (sessionData.status !== 'waiting') {
           functions.logger.info('Join attempt: session not joinable', {
@@ -478,7 +884,6 @@ export const joinHighLowSession = functions
           displayName,
           isActive: false,
           isOnline: true,
-          pile: [],
         });
 
         await sessionRef.update({
@@ -540,7 +945,18 @@ export const joinOrCreateHighLowSession = functions
             }
 
             const sessionData = snap.data() as GameSessionRecord;
+            refreshHighLowIfIdle(sessionRef, transaction, sessionData);
             const now = serverTimestamp();
+
+            if (!Array.isArray(sessionData.piles) || sessionData.piles.length !== TOTAL_PILES) {
+              transaction.set(sessionRef, buildFreshSessionDocument(playerName, displayName));
+              logs.push({
+                message: `Session upgraded to the latest High/Low layout by ${displayName}. Waiting for players to join.`,
+                type: 'system',
+                player: playerName,
+              });
+              return { action: 'reset' as const, logs };
+            }
 
             if (sessionData.status === 'complete') {
               transaction.set(sessionRef, buildFreshSessionDocument(playerName, displayName));
@@ -552,7 +968,8 @@ export const joinOrCreateHighLowSession = functions
               return { action: 'reset' as const, logs };
             }
 
-            const players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+            let players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+            ({ players } = prunePlayersInTransaction(sessionRef, transaction, sessionData, players));
             const existingIndex = findPlayerIndex(players, playerName);
 
             if (existingIndex >= 0) {
@@ -560,6 +977,7 @@ export const joinOrCreateHighLowSession = functions
               players[existingIndex].isOnline = true;
               transaction.update(sessionRef, {
                 players,
+                turnStartedAt: sessionData.turnStartedAt ?? now,
                 updatedAt: now,
                 [`playerLastSeen.${playerName}`]: now,
               });
@@ -576,15 +994,19 @@ export const joinOrCreateHighLowSession = functions
               displayName,
               isActive: true,
               isOnline: true,
-              pile: [],
             });
 
-            const turnIndex =
-              ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: false }) ?? 0;
+            let turnIndex =
+              ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: true }) ?? null;
+            if (turnIndex === null) {
+              const firstOnline = players.findIndex((player) => player.isActive && player.isOnline);
+              turnIndex = firstOnline >= 0 ? firstOnline : 0;
+            }
 
             transaction.update(sessionRef, {
               players,
               turnIndex,
+              turnStartedAt: sessionData.turnStartedAt ?? now,
               updatedAt: now,
               [`playerLastSeen.${playerName}`]: now,
             });
@@ -627,9 +1049,13 @@ export const makeGuess = functions
     ): Promise<{ success: true; result: GuessResult } | { success: false; error: string }> => {
       const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
       const guess = data?.guess;
+      const pileId = typeof data?.pileId === 'string' ? data.pileId.trim() : '';
 
       if (guess !== 'higher' && guess !== 'lower') {
         throw new functions.https.HttpsError('invalid-argument', 'guess must be "higher" or "lower"');
+      }
+      if (!pileId) {
+        throw new functions.https.HttpsError('invalid-argument', 'pileId is required');
       }
 
       const playerName = rawName.trim().toLowerCase();
@@ -654,25 +1080,29 @@ export const makeGuess = functions
             return { success: false, error: 'session_not_found', logs: logQueue } as const;
           }
 
-          const sessionData = snap.data() as GameSessionRecord;
+            const sessionData = snap.data() as GameSessionRecord;
+            refreshHighLowIfIdle(sessionRef, transaction, sessionData);
 
           if (sessionData.status === 'complete') {
             return { success: false, error: 'session_complete', logs: logQueue } as const;
           }
 
-          const players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+          let players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+          ({ players } = prunePlayersInTransaction(sessionRef, transaction, sessionData, players));
 
           if (!players.length) {
             return { success: false, error: 'no_players', logs: logQueue } as const;
           }
 
-          if (!sessionData.deck.length) {
-            return { success: false, error: 'deck_empty', logs: logQueue } as const;
-          }
-
+          const firstOnline = players.findIndex((player) => player.isActive && player.isOnline);
           let currentIndex =
-            ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: true }) ??
-            ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: false });
+            ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: true }) ?? null;
+          if (currentIndex === null) {
+            currentIndex =
+              firstOnline >= 0
+                ? firstOnline
+                : ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: false });
+          }
 
           if (currentIndex === null) {
             return { success: false, error: 'no_active_players', logs: logQueue } as const;
@@ -692,65 +1122,140 @@ export const makeGuess = functions
             return { success: false, error: 'player_offline', logs: logQueue } as const;
           }
 
-          const [drawnCard, ...remainingDeck] = sessionData.deck;
+          if (!Array.isArray(sessionData.piles) || !sessionData.piles.length) {
+            return { success: false, error: 'no_piles', logs: logQueue } as const;
+          }
 
-          if (!drawnCard) {
+          const piles = sessionData.piles.map((pile) => ({
+            ...pile,
+            cards: [...(pile.cards ?? [])],
+          }));
+
+          const pileIndex = piles.findIndex((pile) => pile.id === pileId);
+
+          if (pileIndex === -1) {
+            return { success: false, error: 'invalid_pile', logs: logQueue } as const;
+          }
+
+          const targetPile = piles[pileIndex];
+
+          if (!targetPile.isFaceUp) {
+            return { success: false, error: 'pile_locked', logs: logQueue } as const;
+          }
+
+          if (!targetPile.cards.length) {
+            return { success: false, error: 'pile_empty', logs: logQueue } as const;
+          }
+
+          let deckState = [...sessionData.deck];
+
+          if (!deckState.length) {
             return { success: false, error: 'deck_empty', logs: logQueue } as const;
           }
 
-          let correct = true;
-          const previousCard = currentPlayer.pile[currentPlayer.pile.length - 1];
+          const drawnCards: Card[] = [];
+          let guessResolved = false;
+          let correctGuess = true;
+          let referenceCard = targetPile.cards[targetPile.cards.length - 1];
 
-          if (previousCard) {
-            correct = evaluateGuess(guess, previousCard, drawnCard);
+          while (!guessResolved) {
+            if (!deckState.length) {
+              break;
+            }
+            const [card, ...rest] = deckState;
+            deckState = rest;
+            drawnCards.push(card);
+
+            const previousTop = referenceCard;
+            targetPile.cards.push(card);
+            referenceCard = card;
+
+            const comparison = compareCards(previousTop, card);
+            if (comparison === 0) {
+              continue;
+            }
+
+            correctGuess = evaluateGuess(guess, previousTop, card);
+            if (!correctGuess) {
+              targetPile.isFaceUp = false;
+            }
+            guessResolved = true;
           }
 
-          currentPlayer.pile = [...currentPlayer.pile, drawnCard];
+          if (!guessResolved) {
+            correctGuess = true;
+          }
 
           let status: GameSessionRecord['status'] =
             sessionData.status === 'waiting' ? 'active' : sessionData.status;
+          let outcome: GameOutcome = sessionData.outcome ?? null;
 
-          if (!correct && currentPlayer.isActive) {
-            currentPlayer.isActive = false;
+          const openPiles = piles.filter((pile) => pile.isFaceUp).length;
+          const deckEmpty = deckState.length === 0;
+
+          if (!guessResolved && deckEmpty) {
+            if (openPiles > 0) {
+              status = 'complete';
+              outcome = 'players';
+            } else {
+              status = 'complete';
+              outcome = 'deck';
+            }
+          } else {
+            if (openPiles === 0) {
+              status = 'complete';
+              outcome = 'deck';
+            } else if (deckEmpty) {
+              status = 'complete';
+              outcome = 'players';
+            }
           }
 
           const nextIndex =
-            findNextEligibleIndex(players, currentIndex, { requireOnline: false }) ?? currentIndex;
-
-          const anyActive = players.some((player) => player.isActive);
-          const deckEmpty = remainingDeck.length === 0;
-          if (!anyActive || deckEmpty) {
-            status = 'complete';
-          }
+            findNextEligibleIndex(players, currentIndex, { requireOnline: true }) ?? currentIndex;
 
           const nextPlayerName = status === 'complete' ? null : players[nextIndex]?.name ?? null;
 
+          const nextTurnTimestamp =
+            status === 'complete'
+              ? sessionData.turnStartedAt ?? serverTimestamp()
+              : serverTimestamp();
+
           transaction.update(sessionRef, {
             players,
-            deck: remainingDeck,
+            piles,
+            deck: deckState,
             turnIndex: nextIndex,
             status,
+            outcome,
+            turnStartedAt: nextTurnTimestamp,
             updatedAt: serverTimestamp(),
           });
-
-          const result: GuessResult = {
-            correct,
-            drawnCard,
-            nextPlayer: nextPlayerName,
-            remainingCards: remainingDeck.length,
-          };
 
           const displayName =
             currentPlayer.displayName && currentPlayer.displayName.trim()
               ? currentPlayer.displayName
               : currentPlayer.name;
-          const outcome = correct ? 'correct' : 'incorrect';
+
+          const pileLabel = `Pile ${pileIndex + 1}`;
+          const finalCard =
+            drawnCards[drawnCards.length - 1] ?? targetPile.cards[targetPile.cards.length - 1];
 
           logQueue.push({
-            message: `${displayName} guessed ${guess} and drew ${drawnCard.label} — ${outcome}!`,
+            message: `${displayName} guessed ${guess} on ${pileLabel} and drew ${finalCard?.label ?? '—'} — ${
+              correctGuess ? 'correct' : 'incorrect'
+            }!`,
             type: 'guess',
             player: currentPlayer.name,
           });
+
+          if (!targetPile.isFaceUp) {
+            logQueue.push({
+              message: `${pileLabel} locked for the rest of this game.`,
+              type: 'system',
+              player: currentPlayer.name,
+            });
+          }
 
           if (nextPlayerName && nextPlayerName !== currentPlayer.name) {
             const nextPlayer = players[nextIndex];
@@ -761,14 +1266,34 @@ export const makeGuess = functions
             });
           }
 
+          if (status === 'complete' && outcome) {
+            logQueue.push({
+              message: outcome === 'players' ? 'Players defeated the deck!' : 'The deck wins this round.',
+              type: 'system',
+            });
+          }
+
           functions.logger.info('makeGuess resolved', {
             playerName,
+            pileId,
             guess,
-            correct,
-            remainingCards: remainingDeck.length,
+            correctGuess,
+            remainingCards: deckState.length,
             nextPlayer: nextPlayerName,
             status,
+            outcome,
           });
+
+          const result: GuessResult = {
+            correct: correctGuess,
+            drawnCard: finalCard,
+            drawnCards,
+            pileId: targetPile.id,
+            pileFaceUp: targetPile.isFaceUp,
+            nextPlayer: nextPlayerName,
+            remainingCards: deckState.length,
+            outcome: status === 'complete' ? outcome : null,
+          };
 
           return { success: true, result, logs: logQueue } as const;
         });
@@ -818,7 +1343,10 @@ export const reportPresence = functions
           }
 
           const sessionData = snap.data() as GameSessionRecord;
-          const players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+          refreshHighLowIfIdle(sessionRef, transaction, sessionData);
+          refreshHighLowIfIdle(sessionRef, transaction, sessionData);
+          let players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+          ({ players } = prunePlayersInTransaction(sessionRef, transaction, sessionData, players));
           const targetIndex = findPlayerIndex(players, playerName);
 
           if (targetIndex === -1) {
@@ -826,13 +1354,34 @@ export const reportPresence = functions
           }
 
           const now = serverTimestamp();
+          const previouslyOnline = players[targetIndex].isOnline;
+
+          if (previouslyOnline === isOnline) {
+            transaction.update(sessionRef, {
+              updatedAt: now,
+              [`playerLastSeen.${playerName}`]: now,
+            });
+            return { success: true, logs } as const;
+          }
+
           players[targetIndex].isOnline = isOnline;
 
+          const previousTurnIndex = sessionData.turnIndex ?? 0;
+          const firstOnlineIndex = players.findIndex((player) => player.isActive && player.isOnline);
           let turnIndex =
-            ensureTurnIndex(players, sessionData.turnIndex ?? 0, { requireOnline: false }) ?? 0;
+            ensureTurnIndex(players, previousTurnIndex, { requireOnline: true }) ?? null;
+          if (turnIndex === null && firstOnlineIndex >= 0) {
+            turnIndex = firstOnlineIndex;
+          }
+          if (turnIndex === null) {
+            turnIndex = ensureTurnIndex(players, previousTurnIndex, { requireOnline: false }) ?? 0;
+          }
 
           if (!isOnline && turnIndex === targetIndex) {
-            const nextOnline = findNextEligibleIndex(players, turnIndex, { requireOnline: true });
+            const nextOnline = findNextEligibleIndex(players, turnIndex, {
+              requireOnline: true,
+              seed: targetIndex,
+            });
             if (nextOnline !== null) {
               turnIndex = nextOnline;
               const nextPlayer = players[nextOnline];
@@ -864,9 +1413,12 @@ export const reportPresence = functions
             }
           }
 
+          const turnStartUpdate = turnIndex !== previousTurnIndex ? now : sessionData.turnStartedAt ?? now;
+
           transaction.update(sessionRef, {
             players,
             turnIndex,
+            turnStartedAt: turnStartUpdate,
             updatedAt: now,
             [`playerLastSeen.${playerName}`]: now,
           });
@@ -887,6 +1439,111 @@ export const reportPresence = functions
       }
     }
   );
+
+export const resolveTurnHang = functions
+  .region(REGION)
+  .https.onCall(
+    async (
+      data: ResolveTurnRequest
+    ): Promise<{ resolved: boolean; forfeited?: string | null; forfeitedLabel?: string | null }> => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = sessionsCollection().doc(CURRENT_SESSION_ID);
+
+    try {
+      const result = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { resolved: false } as const;
+        }
+        const sessionData = snap.data() as GameSessionRecord;
+        if (sessionData.status === 'complete') {
+          return { resolved: false } as const;
+        }
+        let players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+        ({ players } = prunePlayersInTransaction(sessionRef, transaction, sessionData, players));
+        if (!players.length) {
+          return { resolved: false } as const;
+        }
+        const preferredIndex =
+          typeof sessionData.turnIndex === 'number' ? sessionData.turnIndex : 0;
+        const hasEligibleOnline = players.some((player) => player.isActive && player.isOnline);
+        let currentIndex: number | null =
+          ensureTurnIndex(players, preferredIndex, { requireOnline: true }) ?? null;
+        if (currentIndex === null && !hasEligibleOnline) {
+          currentIndex =
+            ensureTurnIndex(players, preferredIndex, { requireOnline: false }) ?? null;
+        }
+
+        if (currentIndex === null) {
+          return { resolved: false } as const;
+        }
+
+        const currentPlayer = players[currentIndex];
+        const turnStartedAt = sessionData.turnStartedAt as FirebaseFirestore.Timestamp | undefined;
+        const nowTimestamp = admin.firestore.Timestamp.now();
+        const timedOut =
+          Boolean(turnStartedAt) &&
+          nowTimestamp.seconds - (turnStartedAt as FirebaseFirestore.Timestamp).seconds > TURN_TIMEOUT_SECONDS;
+
+        const shouldAdvance =
+          !currentPlayer?.isActive || !currentPlayer.isOnline || timedOut;
+
+        if (!shouldAdvance) {
+          return { resolved: false } as const;
+        }
+
+        if (!hasEligibleOnline) {
+          return { resolved: false } as const;
+        }
+
+        const nextOnline = findNextEligibleIndex(players, currentIndex, { requireOnline: true });
+
+        if (nextOnline === null || nextOnline === currentIndex) {
+          return { resolved: false } as const;
+        }
+
+        const now = serverTimestamp();
+        transaction.update(sessionRef, {
+          turnIndex: nextOnline,
+          turnStartedAt: now,
+          updatedAt: now,
+        });
+
+        return {
+          resolved: true,
+          forfeited: timedOut ? currentPlayer?.name ?? null : null,
+          forfeitedLabel: timedOut
+            ? currentPlayer?.displayName ?? currentPlayer?.name ?? null
+            : null,
+        } as const;
+      });
+
+      if (result.resolved) {
+        if (result.forfeited) {
+          await logGameEvent(
+            `${result.forfeitedLabel ?? result.forfeited} forfeited their turn due to inactivity.`,
+            'turn',
+            result.forfeited
+          );
+        }
+        functions.logger.info('resolveTurnHang advanced turn', {
+          triggeredBy: playerName,
+          forfeited: result.forfeited,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      functions.logger.error('Failed to resolve hanging turn', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to resolve turn state');
+    }
+  });
 
 export const startNewHighLowSession = functions
   .region(REGION)
@@ -927,16 +1584,38 @@ export const startNewHighLowSession = functions
           const archiveDocRef = archiveCollection.doc(Date.now().toString());
           transaction.set(archiveDocRef, sessionData);
 
+          let players = await updatePlayersIfChanged(sessionRef, sessionData.players ?? [], transaction);
+          ({ players } = prunePlayersInTransaction(sessionRef, transaction, sessionData, players));
+
           const now = serverTimestamp();
+          const { deck, piles } = createInitialPilesState();
+          const preservedPlayers = players.map((player) => ({
+            name: player.name,
+            displayName: player.displayName,
+            isActive: true,
+            isOnline: player.isOnline ?? true,
+          }));
+
+          const refreshedLastSeen: PlayerLastSeenMap<TimestampLike> = preservedPlayers.reduce(
+            (acc, player) => {
+              acc[player.name] = now;
+              return acc;
+            },
+            {} as PlayerLastSeenMap<TimestampLike>
+          );
+
           transaction.set(sessionRef, {
             status: 'waiting',
-            deck: shuffle(generateDeck()),
-            players: [],
+            deck,
+            piles,
+            players: preservedPlayers,
             turnIndex: 0,
+            turnStartedAt: now,
             createdAt: now,
             updatedAt: now,
             settings: { acesHigh: false },
-            playerLastSeen: {},
+            playerLastSeen: refreshedLastSeen,
+            outcome: null,
           });
 
           return { success: true } as const;
@@ -953,3 +1632,485 @@ export const startNewHighLowSession = functions
       }
     }
   );
+
+export const cleanupHighLowPlayers = functions
+  .region(REGION)
+  .https.onCall(async (): Promise<{ removed: number }> => {
+    const sessionRef = sessionsCollection().doc(CURRENT_SESSION_ID);
+    try {
+      const result = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { removed: 0 };
+        }
+        const sessionData = snap.data() as GameSessionRecord;
+        refreshHighLowIfIdle(sessionRef, transaction, sessionData);
+        const players = await updatePlayersIfChanged(sessionRef, sessionData.players, transaction);
+        if (!players.length) {
+          return { removed: 0 };
+        }
+        const nowSeconds = admin.firestore.Timestamp.now().seconds;
+        const { filtered, removed } = pruneStaleHighLowPlayers(
+          players,
+          sessionData.playerLastSeen,
+          nowSeconds
+        );
+        if (!removed.length) {
+          return { removed: 0 };
+        }
+        const nextTurn =
+          ensureTurnIndex(filtered, sessionData.turnIndex ?? 0, { requireOnline: true }) ??
+          ensureTurnIndex(filtered, sessionData.turnIndex ?? 0, { requireOnline: false }) ??
+          0;
+        const updatedLastSeen = { ...(sessionData.playerLastSeen ?? {}) };
+        removed.forEach((name) => {
+          delete updatedLastSeen[name];
+        });
+        transaction.update(sessionRef, {
+          players: filtered,
+          playerLastSeen: updatedLastSeen,
+          turnIndex: nextTurn,
+          updatedAt: serverTimestamp(),
+        });
+        return { removed: removed.length };
+      });
+      return result;
+    } catch (error) {
+      functions.logger.error('Failed to cleanup High/Low players', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to cleanup High/Low session');
+    }
+  });
+
+export const sendEmojiEffect = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string; emoji?: string }) => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const emojiKey = typeof data?.emoji === 'string' ? (data.emoji.trim() as EmojiEffectKey) : '';
+    const playerName = rawName.trim().toLowerCase();
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    if (!emojiKey || !(emojiKey in EMOJI_EFFECTS)) {
+      throw new functions.https.HttpsError('invalid-argument', 'emoji is invalid');
+    }
+
+    const sessionRef = sessionsCollection().doc(CURRENT_SESSION_ID);
+
+    try {
+      const snap = await sessionRef.get();
+      if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Session not found');
+      }
+
+      const sessionData = snap.data() as GameSessionRecord;
+      let players = await updatePlayersIfChanged(sessionRef, sessionData.players);
+      ({ players } = await prunePlayersWithoutTransaction(sessionRef, sessionData, players));
+      const playerRecord = players.find((player) => player.name === playerName);
+
+      if (!playerRecord) {
+        throw new functions.https.HttpsError('failed-precondition', 'player_not_in_session');
+      }
+
+      const effectEntry: EmojiEffectEntry = {
+        emoji: emojiKey as EmojiEffectKey,
+        label: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].label,
+        symbol: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].symbol,
+        player: playerName,
+        displayName:
+          playerRecord.displayName && playerRecord.displayName.trim()
+            ? playerRecord.displayName
+            : playerRecord.name,
+        timestamp: serverTimestamp(),
+      };
+
+      await effectsCollection().add(effectEntry);
+      functions.logger.info('Emoji effect recorded', {
+        emoji: emojiKey,
+        playerName,
+      });
+
+      return { success: true };
+    } catch (error) {
+      functions.logger.error('Failed to send emoji effect', {
+        error: error instanceof Error ? error.message : error,
+        emoji: emojiKey,
+        playerName,
+      });
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError('internal', 'Failed to send emoji effect');
+    }
+  });
+
+interface OldMaidJoinRequest {
+  playerName?: string;
+  displayName?: string;
+}
+
+const normalizeDisplayName = (raw?: string, fallback?: string): string | undefined => {
+  if (!raw && !fallback) {
+    return undefined;
+  }
+  const trimmed = raw?.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  return fallback;
+};
+
+export const joinOrCreateOldMaidSession = functions
+  .region(REGION)
+  .https.onCall(async (data: OldMaidJoinRequest): Promise<{ sessionId: string }> => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+    const displayName = normalizeDisplayName(data?.displayName, rawName.trim());
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          transaction.set(sessionRef, buildOldMaidBaseSession());
+        }
+      });
+
+      await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        const session = (snap.data() as OldMaidSessionRecord) ?? buildOldMaidBaseSession();
+        pruneOldMaidPlayersInTransaction(sessionRef, transaction, session);
+        refreshOldMaidIfIdle(sessionRef, transaction, session);
+
+        if (session.players.length === 0 && session.status !== 'waiting') {
+          transaction.update(sessionRef, {
+            status: 'waiting',
+            turnIndex: 0,
+            loser: null,
+            updatedAt: serverTimestamp(),
+          });
+          session.status = 'waiting';
+          session.turnIndex = 0;
+          session.loser = null;
+        }
+
+        if (session.status === 'active') {
+          const existingIndex = session.players.findIndex((player) => player.name === playerName);
+          if (existingIndex === -1) {
+            throw new functions.https.HttpsError('failed-precondition', 'game_in_progress');
+          }
+          session.players[existingIndex].displayName = displayName;
+          session.players[existingIndex].isOnline = true;
+          session.players[existingIndex].idleWarning = false;
+          transaction.update(sessionRef, {
+            players: session.players,
+            updatedAt: serverTimestamp(),
+            [`playerLastSeen.${playerName}`]: serverTimestamp(),
+          });
+          return;
+        }
+
+        const players = [...session.players];
+        const existingIndex = players.findIndex((player) => player.name === playerName);
+        if (existingIndex >= 0) {
+          players[existingIndex].displayName = displayName;
+          players[existingIndex].isOnline = true;
+          players[existingIndex].idleWarning = false;
+        } else {
+          players.push({
+            name: playerName,
+            displayName,
+            hand: [],
+            discards: [],
+            isOnline: true,
+            isSafe: false,
+            idleWarning: false,
+          });
+        }
+
+        transaction.update(sessionRef, {
+          players,
+          status: 'waiting' as OldMaidSessionStatus,
+          updatedAt: serverTimestamp(),
+          loser: null,
+          [`playerLastSeen.${playerName}`]: serverTimestamp(),
+        });
+      });
+
+      return { sessionId: OLD_MAID_CURRENT_SESSION_ID };
+    } catch (error) {
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      functions.logger.error('Failed to join Old Maid session', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to join Old Maid session');
+    }
+  });
+
+export const reportOldMaidPresence = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string; isOnline?: boolean }) => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+    const isOnline = data?.isOnline !== false;
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return;
+        }
+        const session = snap.data() as OldMaidSessionRecord;
+        refreshOldMaidIfIdle(sessionRef, transaction, session);
+        pruneOldMaidPlayersInTransaction(sessionRef, transaction, session);
+        const players = [...session.players];
+        const index = players.findIndex((player) => player.name === playerName);
+        if (index === -1) {
+          return;
+        }
+        if (players[index].isOnline === isOnline) {
+          return;
+        }
+        players[index].isOnline = isOnline;
+        if (isOnline && players[index].idleWarning) {
+          players[index].idleWarning = false;
+        }
+
+        const updates: Partial<OldMaidSessionRecord> & { players: OldMaidPlayerWrite[] } = {
+          players,
+          updatedAt: serverTimestamp(),
+          [`playerLastSeen.${playerName}`]: serverTimestamp(),
+        };
+
+        if (!isOnline && session.status === 'active') {
+          updates.status = 'complete';
+          updates.loser = playerName;
+        }
+
+        transaction.update(sessionRef, updates);
+      });
+    } catch (error) {
+      functions.logger.error('Failed to update Old Maid presence', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to update presence');
+    }
+  });
+
+export const cleanupOldMaidPlayers = functions
+  .region(REGION)
+  .https.onCall(async (): Promise<{ removed: number }> => {
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+    try {
+      const result = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { removed: 0 };
+        }
+        const session = snap.data() as OldMaidSessionRecord;
+        const removed = pruneOldMaidPlayersInTransaction(sessionRef, transaction, session);
+        if (session.players.length === 0) {
+          transaction.update(sessionRef, {
+            turnIndex: 0,
+          });
+        }
+        return { removed: removed ?? 0 };
+      });
+      return result;
+    } catch (error) {
+      functions.logger.error('Failed to cleanup Old Maid players', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to cleanup Old Maid session');
+    }
+  });
+
+export const startOldMaidSession = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string }): Promise<{ success: true } | { success: false; error: string }> => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      const response = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { success: false, error: 'session_missing' } as const;
+        }
+        const session = snap.data() as OldMaidSessionRecord;
+        refreshOldMaidIfIdle(sessionRef, transaction, session);
+        pruneOldMaidPlayersInTransaction(sessionRef, transaction, session);
+
+        if (session.status === 'active') {
+          return { success: false, error: 'already_active' } as const;
+        }
+
+        const eligiblePlayers = session.players
+          .filter((player) => player.isOnline)
+          .map((player) => ({
+            name: player.name,
+            displayName: player.displayName,
+            hand: [] as Card[],
+            discards: [] as OldMaidPairRecord[],
+            isOnline: true,
+            isSafe: false,
+            idleWarning: false,
+          }));
+
+        if (!eligiblePlayers.some((player) => player.name === playerName)) {
+          return { success: false, error: 'must_be_online' } as const;
+        }
+        if (eligiblePlayers.length < 2) {
+          return { success: false, error: 'need_two_players' } as const;
+        }
+
+        const deck = buildOldMaidDeck();
+        deck.forEach((card, index) => {
+          eligiblePlayers[index % eligiblePlayers.length].hand.push(card);
+        });
+
+        eligiblePlayers.forEach((player) => {
+          const { remaining, pairs } = resolveOldMaidPairs(player.hand);
+          player.hand = remaining;
+          player.discards = pairs;
+          player.isSafe = player.hand.length === 0;
+        });
+
+        const startIndex = eligiblePlayers.findIndex((player) => player.hand.length > 0);
+
+        const playerLastSeen = eligiblePlayers.reduce((acc, player) => {
+          acc[player.name] = serverTimestamp();
+          return acc;
+        }, {} as PlayerLastSeenMap<TimestampLike>);
+
+        transaction.set(sessionRef, {
+          status: 'active',
+          players: eligiblePlayers,
+          turnIndex: startIndex >= 0 ? startIndex : 0,
+          updatedAt: serverTimestamp(),
+          createdAt: session.createdAt ?? serverTimestamp(),
+          loser: null,
+          playerLastSeen,
+        });
+
+        return { success: true } as const;
+      });
+
+      return response;
+    } catch (error) {
+      functions.logger.error('Failed to start Old Maid session', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to start Old Maid game');
+    }
+  });
+
+export const drawOldMaidCard = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string; cardPosition?: number }): Promise<{ success: true } | { success: false; error: string }> => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+    const requestedPosition =
+      typeof data?.cardPosition === 'number' && Number.isFinite(data.cardPosition)
+        ? Math.max(0, Math.floor(data.cardPosition))
+        : null;
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      const result = await db.runTransaction(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { success: false, error: 'session_missing' } as const;
+        }
+
+        const session = snap.data() as OldMaidSessionRecord;
+        if (session.status !== 'active') {
+          return { success: false, error: 'not_active' } as const;
+        }
+        pruneOldMaidPlayersInTransaction(sessionRef, transaction, session);
+
+        const players = session.players.map((player) => ({
+          name: player.name,
+          displayName: player.displayName,
+          hand: [...player.hand],
+          discards: player.discards.map((pair) => ({ cards: [...pair.cards] })),
+          isOnline: player.isOnline,
+          isSafe: player.isSafe,
+          idleWarning: player.idleWarning ?? false,
+        }));
+        const currentIndex = players.findIndex((player) => player.name === playerName);
+        if (currentIndex === -1) {
+          return { success: false, error: 'not_in_game' } as const;
+        }
+
+        if (currentIndex !== session.turnIndex) {
+          return { success: false, error: 'not_your_turn' } as const;
+        }
+
+        const targetIndex = findNextPlayerWithCards(players, currentIndex);
+        if (targetIndex === null) {
+          return { success: false, error: 'no_target' } as const;
+        }
+
+        const target = players[targetIndex];
+        const active = players[currentIndex];
+
+        if (!target.hand.length) {
+          return { success: false, error: 'target_empty' } as const;
+        }
+
+        const drawIndex =
+          requestedPosition !== null && requestedPosition < target.hand.length
+            ? requestedPosition
+            : Math.floor(Math.random() * target.hand.length);
+
+        const [drawnCard] = target.hand.splice(drawIndex, 1);
+
+        const updatedHand = [...active.hand, drawnCard];
+        const { remaining, pairs } = resolveOldMaidPairs(updatedHand);
+        active.hand = remaining;
+        active.discards = [...active.discards, ...pairs];
+        active.isSafe = active.hand.length === 0;
+        target.isSafe = target.hand.length === 0;
+
+        const playersWithCards = players.filter((player) => player.hand.length > 0);
+        const loser = playersWithCards.length === 1 ? playersWithCards[0].name : null;
+        const nextTurn = loser
+          ? players.findIndex((player) => player.name === loser)
+          : findNextPlayerWithCards(players, currentIndex) ?? currentIndex;
+
+        transaction.update(sessionRef, {
+          players,
+          turnIndex: nextTurn,
+          updatedAt: serverTimestamp(),
+          status: loser ? ('complete' as OldMaidSessionStatus) : 'active',
+          loser: loser ?? null,
+          [`playerLastSeen.${playerName}`]: serverTimestamp(),
+        });
+
+        return { success: true } as const;
+      });
+
+      return result;
+    } catch (error) {
+      functions.logger.error('Failed to draw Old Maid card', { error });
+      throw new functions.https.HttpsError('internal', 'Unable to draw card');
+    }
+  });

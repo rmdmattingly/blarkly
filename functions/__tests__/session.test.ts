@@ -46,7 +46,10 @@ describe('joinOrCreateHighLowSession', () => {
 
     const snapshot = await sessionRef().get();
     expect(snapshot.exists).toBe(true);
-    expect(snapshot.data()?.players?.[0]?.name).toBe('ada');
+    const data = snapshot.data() as any;
+    expect(data?.players?.[0]?.name).toBe('ada');
+    expect(Array.isArray(data?.piles)).toBe(true);
+    expect(data?.piles?.length).toBe(9);
   });
 
   test('deduplicates player on reconnect', async () => {
@@ -107,5 +110,38 @@ describe('joinOrCreateHighLowSession', () => {
 
     expect(data?.players?.[0]?.lastSeen).toBeUndefined();
     expect(data?.playerLastSeen?.ada).toBeDefined();
+  });
+});
+
+describe('reportPresence', () => {
+  test('does not log when player is already online', async () => {
+    const joinCallable = wrapCallable(backend.joinOrCreateHighLowSession);
+    const presenceCallable = wrapCallable(backend.reportPresence);
+    const logSpy = jest.spyOn(backend, 'logGameEvent').mockResolvedValue(undefined);
+
+    await joinCallable({ playerName: 'Ada' });
+    logSpy.mockClear();
+
+    await presenceCallable({ playerName: 'ada', isOnline: true });
+
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  test('logs when player comes back online after disconnect', async () => {
+    const joinCallable = wrapCallable(backend.joinOrCreateHighLowSession);
+    const presenceCallable = wrapCallable(backend.reportPresence);
+    const logSpy = jest.spyOn(backend, 'logGameEvent').mockResolvedValue(undefined);
+
+    await joinCallable({ playerName: 'Ada' });
+
+    await presenceCallable({ playerName: 'ada', isOnline: false });
+    logSpy.mockClear();
+
+    await presenceCallable({ playerName: 'ada', isOnline: true });
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const [loggedMessage, loggedType] = logSpy.mock.calls[0];
+    expect(loggedType).toBe('connect');
+    expect(String(loggedMessage)).toMatch(/came online/i);
   });
 });

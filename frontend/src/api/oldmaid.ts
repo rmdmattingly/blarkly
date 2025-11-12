@@ -1,0 +1,138 @@
+import { httpsCallable } from 'firebase/functions';
+import { doc, onSnapshot, type FirestoreError } from 'firebase/firestore';
+
+import { db, functions } from '../firebaseConfig';
+import type { Card } from './highlow';
+
+export interface OldMaidPlayer {
+  name: string;
+  displayName?: string;
+  hand: Card[];
+  discards: Array<{ cards: Card[] }>;
+  isOnline: boolean;
+  isSafe: boolean;
+  idleWarning?: boolean;
+}
+
+export type OldMaidStatus = 'waiting' | 'active' | 'complete';
+
+export interface OldMaidSession {
+  id: string;
+  status: OldMaidStatus;
+  players: OldMaidPlayer[];
+  turnIndex: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  loser?: string | null;
+}
+
+const CURRENT_SESSION_ID = 'current';
+
+const joinCallable = httpsCallable<
+  { playerName: string; displayName?: string },
+  { sessionId?: string }
+>(functions, 'joinOrCreateOldMaidSession');
+
+const startCallable = httpsCallable<{ playerName: string }, { success?: boolean; error?: string }>(
+  functions,
+  'startOldMaidSession'
+);
+
+const drawCallable = httpsCallable<{ playerName: string; cardPosition?: number }, { success?: boolean; error?: string }>(
+  functions,
+  'drawOldMaidCard'
+);
+
+const presenceCallable = httpsCallable<{ playerName: string; isOnline: boolean }, void>(
+  functions,
+  'reportOldMaidPresence'
+);
+
+const cleanupCallable = httpsCallable<Record<string, never>, { removed?: number }>(
+  functions,
+  'cleanupOldMaidPlayers'
+);
+
+export async function joinOldMaidSession(playerName: string, displayName?: string): Promise<string> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('playerName is required');
+  }
+  const response = await joinCallable({ playerName: normalized, displayName: displayName?.trim() || undefined });
+  const data = response.data as { sessionId?: string };
+  if (!data?.sessionId) {
+    throw new Error('Unable to join Old Maid session');
+  }
+  return data.sessionId;
+}
+
+export async function startOldMaidGame(playerName: string): Promise<void> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('playerName is required');
+  }
+  const response = await startCallable({ playerName: normalized });
+  const data = response.data as { success?: boolean; error?: string };
+  if (data?.success === false || data?.error) {
+    throw new Error(data.error ?? 'Unable to start Old Maid game');
+  }
+}
+
+export async function drawOldMaid(playerName: string, cardPosition?: number): Promise<void> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('playerName is required');
+  }
+  const payload: { playerName: string; cardPosition?: number } = { playerName: normalized };
+  if (typeof cardPosition === 'number' && Number.isFinite(cardPosition) && cardPosition >= 0) {
+    payload.cardPosition = Math.floor(cardPosition);
+  }
+  const response = await drawCallable(payload);
+  const data = response.data as { success?: boolean; error?: string };
+  if (data?.success === false || data?.error) {
+    throw new Error(data.error ?? 'Unable to draw card');
+  }
+}
+
+export async function reportOldMaidPresence(playerName: string, isOnline: boolean): Promise<void> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+  await presenceCallable({ playerName: normalized, isOnline });
+}
+
+export async function cleanupOldMaidPlayers(): Promise<number> {
+  const response = await cleanupCallable({});
+  const data = response.data as { removed?: number };
+  return data?.removed ?? 0;
+}
+
+export function subscribeToOldMaidSession(
+  onUpdate: (session: OldMaidSession) => void,
+  onError?: (error: FirestoreError | Error) => void
+): () => void {
+  const docRef = doc(db, 'games', 'oldmaid', 'sessions', CURRENT_SESSION_ID);
+  return onSnapshot(
+    docRef,
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        const missingError = new Error('Old Maid session not found');
+        if (onError) {
+          onError(missingError);
+        } else {
+          console.error(missingError);
+        }
+        return;
+      }
+      const data = snapshot.data() as OldMaidSession;
+      onUpdate({ ...data, id: snapshot.id });
+    },
+    (error) => {
+      console.error('Old Maid session listener failed', error);
+      if (onError) {
+        onError(error);
+      }
+    }
+  );
+}
