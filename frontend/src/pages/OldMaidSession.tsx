@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import type { Card } from '../api/highlow';
 import {
   drawOldMaid,
+  joinOldMaidSession,
   OldMaidPlayer,
   OldMaidSession,
   type OldMaidStatus,
@@ -16,8 +17,8 @@ import {
 import { usePresence } from '../hooks/usePresence';
 import GameNav from '../components/GameNav';
 import OldMaidTable from '../components/OldMaidTable';
-import { EMOJI_OPTIONS_OLDMAID, type EmojiEffectKey } from '../constants/emoji';
-import { readStoredName } from '../utils/playerName';
+import { EMOJI_OPTIONS_OLDMAID, type OldMaidEmojiEffectKey } from '../constants/emoji';
+import { readStoredDisplayName, readStoredName } from '../utils/playerName';
 
 const DRAW_REVEAL_DELAY_MS = 800;
 const DRAW_RESULT_DISPLAY_MS = 2800;
@@ -64,6 +65,8 @@ const OldMaidSessionPage = () => {
   const [emojiError, setEmojiError] = useState<string | null>(null);
   const reactionTimersRef = useRef<Record<string, number>>({});
   const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
+  const rejoinInFlightRef = useRef(false);
+  const storedDisplayNameRef = useRef<string | null>(readStoredDisplayName() ?? null);
 
   usePresence(playerName || null, Boolean(session), reportOldMaidPresence);
 
@@ -161,6 +164,51 @@ const OldMaidSessionPage = () => {
     }
     return session.players.find((player) => player.name === playerName);
   }, [session, playerName]);
+
+  const shouldAutoRejoin = useMemo(() => {
+    if (!session || !playerName) {
+      return false;
+    }
+    const isSeated = session.players.some((player) => player.name === playerName);
+    const noGameInProgress = session.status !== 'active';
+    return !isSeated && noGameInProgress;
+  }, [session, playerName]);
+
+  const handleAutoRejoin = useCallback(() => {
+    if (!playerName || !shouldAutoRejoin || rejoinInFlightRef.current) {
+      return;
+    }
+    rejoinInFlightRef.current = true;
+    const displayName = storedDisplayNameRef.current ?? playerName;
+    joinOldMaidSession(playerName, displayName)
+      .catch((err) => {
+        console.error('Auto-join Old Maid failed', err);
+        setActionError('Rejoining failed. Tap Old Maid to retry.');
+      })
+      .finally(() => {
+        rejoinInFlightRef.current = false;
+      });
+  }, [playerName, shouldAutoRejoin]);
+
+  useEffect(() => {
+    if (!shouldAutoRejoin) {
+      return undefined;
+    }
+    const handlePointer = () => {
+      handleAutoRejoin();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        handleAutoRejoin();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointer);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [handleAutoRejoin, shouldAutoRejoin]);
 
   const appendLog = useCallback((message: string) => {
     setLogs((prev) => {
@@ -340,7 +388,7 @@ const OldMaidSessionPage = () => {
     }
   };
 
-  const handleSendEmoji = async (emojiId: EmojiEffectKey) => {
+  const handleSendEmoji = async (emojiId: OldMaidEmojiEffectKey) => {
     if (!playerName) {
       setEmojiError('Join the table before sending reactions.');
       return;
@@ -689,23 +737,6 @@ const OldMaidSessionPage = () => {
           <p role="alert" className="Session-error centered">
             {actionError}
           </p>
-        ) : null}
-      </section>
-      <section className="Session-card OldMaid-startPanelFooter">
-          <div>
-            <h2>Start New Game</h2>
-            <p>Reseat everyone who is currently online and shuffle a fresh deck.</p>
-          </div>
-        <button
-          type="button"
-          className="OldMaid-startBtn"
-          disabled={!playerName || session.status === 'active' || startingGame}
-          onClick={handleStartGame}
-        >
-          {startingGame ? 'Starting…' : 'Start New Game'}
-        </button>
-        {actionError && session.status !== 'active' ? (
-          <p role="alert" className="Session-error centered">{actionError}</p>
         ) : null}
       </section>
     </div>
