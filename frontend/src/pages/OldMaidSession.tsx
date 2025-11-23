@@ -20,12 +20,14 @@ import GameNav from '../components/GameNav';
 import OldMaidTable from '../components/OldMaidTable';
 import { EMOJI_OPTIONS_OLDMAID, type OldMaidEmojiEffectKey } from '../constants/emoji';
 import { readStoredDisplayName, readStoredName } from '../utils/playerName';
+import { deriveShuffleLock } from '../utils/shuffleState';
 
 const DRAW_REVEAL_DELAY_MS = 800;
 const DRAW_RESULT_DISPLAY_MS = 2800;
 const DEFENSE_REVEAL_DELAY_MS = 600;
 const DEFENSE_RESULT_DISPLAY_MS = 2400;
 const SHUFFLE_PENDING_FALLBACK_MS = 7000;
+const SHUFFLE_LOCK_TTL_MS = 5000;
 
 type TheftReveal = {
   cardLabel: string;
@@ -71,6 +73,7 @@ const OldMaidSessionPage = () => {
   const shuffleReleaseTimerRef = useRef<number | null>(null);
   const [shuffleAwaitingSync, setShuffleAwaitingSync] = useState(false);
   const [shuffleServerLockUntil, setShuffleServerLockUntil] = useState<number | null>(null);
+  const [shuffleClientLockUntil, setShuffleClientLockUntil] = useState<number | null>(null);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [shufflePending, setShufflePending] = useState(false);
   const rejoinInFlightRef = useRef(false);
@@ -177,19 +180,18 @@ const OldMaidSessionPage = () => {
     if (!session || !playerName) {
       return false;
     }
-      const isSeated = session.players.some((player) => player.name === playerName);
-      const noGameInProgress = session.status !== 'active';
-      return !isSeated && noGameInProgress;
-    }, [session, playerName]);
-
-  const rawHandOrderSignature = useMemo(
-    () => rawHand.map((card) => card.label).join('|'),
-    [rawHand]
-  );
+    const isSeated = session.players.some((player) => player.name === playerName);
+    const noGameInProgress = session.status !== 'active';
+    return !isSeated && noGameInProgress;
+  }, [session, playerName]);
 
   const serverShuffleLocked = useMemo(
     () => shuffleServerLockUntil !== null && shuffleServerLockUntil > Date.now(),
     [shuffleServerLockUntil]
+  );
+  const clientShuffleLocked = useMemo(
+    () => shuffleClientLockUntil !== null && shuffleClientLockUntil > Date.now(),
+    [shuffleClientLockUntil]
   );
 
   useEffect(() => {
@@ -204,6 +206,21 @@ const OldMaidSessionPage = () => {
       setShuffleServerLockUntil(null);
     }
   }, [session?.shuffleLock?.expiresAt]);
+
+  useEffect(() => {
+    if (shuffleClientLockUntil === null) {
+      return undefined;
+    }
+    const remaining = Math.max(shuffleClientLockUntil - Date.now(), 0);
+    if (remaining <= 0) {
+      setShuffleClientLockUntil(null);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setShuffleClientLockUntil(null);
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [shuffleClientLockUntil]);
 
   const handleAutoRejoin = useCallback(() => {
     if (!playerName || !shouldAutoRejoin || rejoinInFlightRef.current) {
@@ -299,10 +316,14 @@ const OldMaidSessionPage = () => {
     () => rawHand.map((card) => `${card.suit}-${card.rank}`).join('|'),
     [rawHand]
   );
+  const rawHandOrderSignature = useMemo(
+    () => rawHand.map((card) => card.label).join('|'),
+    [rawHand]
+  );
 
   const shuffleLocked = useMemo(
-    () => shufflePending || shuffleAwaitingSync || serverShuffleLocked,
-    [serverShuffleLocked, shuffleAwaitingSync, shufflePending]
+    () => deriveShuffleLock({ pending: shufflePending, awaiting: shuffleAwaitingSync, serverLockUntil: shuffleServerLockUntil, clientLockUntil: shuffleClientLockUntil }).locked,
+    [shufflePending, shuffleAwaitingSync, shuffleServerLockUntil, shuffleClientLockUntil]
   );
 
   useEffect(() => {
@@ -325,6 +346,18 @@ const OldMaidSessionPage = () => {
       }
     }
   }, [rawHand, rawHandOrderSignature]);
+
+  useEffect(() => {
+    if (!shuffleAwaitingSync) {
+      return;
+    }
+    const anyLock = serverShuffleLocked || clientShuffleLocked;
+    if (!anyLock && !shuffleReleaseTimerRef.current) {
+      shuffleAwaitSignatureRef.current = null;
+      setShuffleAwaitingSync(false);
+      setShufflePending(false);
+    }
+  }, [clientShuffleLocked, serverShuffleLocked, shuffleAwaitingSync]);
 
   const orderedHand = useMemo(() => {
     const keyed = rawHand.map((card, idx) => ({ key: `${idx}-${card.label}`, card }));
@@ -360,6 +393,7 @@ const OldMaidSessionPage = () => {
     setShufflePending(true);
     setShuffleAwaitingSync(true);
     setShuffleError(null);
+    setShuffleError(null);
     shuffleAwaitSignatureRef.current = rawHandOrderSignature;
     if (shuffleReleaseTimerRef.current) {
       window.clearTimeout(shuffleReleaseTimerRef.current);
@@ -374,6 +408,7 @@ const OldMaidSessionPage = () => {
           setShufflePending(false);
         }, SHUFFLE_PENDING_FALLBACK_MS);
       } else {
+        setShuffleClientLockUntil(Date.now() + SHUFFLE_LOCK_TTL_MS);
         setShuffleAwaitingSync(false);
         setShufflePending(false);
         shuffleAwaitSignatureRef.current = null;

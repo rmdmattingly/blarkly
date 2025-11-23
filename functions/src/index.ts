@@ -28,6 +28,7 @@ const WAITING_ROOM_PLAYER_SECONDS = 5 * 60;
 const IDLE_WARNING_BUFFER_SECONDS = 30;
 const STALE_GAME_SECONDS = 60 * 60;
 const STALLED_ACTIVE_OLD_MAID_SECONDS = 5 * 60;
+const SHUFFLE_LOCK_TTL_MS = 5_000;
 
 type FirestoreTimestamp = FirebaseFirestore.Timestamp;
 type TimestampLike = FirebaseFirestore.Timestamp | FirebaseFirestore.FieldValue;
@@ -125,6 +126,7 @@ interface OldMaidSessionRecord {
   updatedAt: TimestampLike;
   loser?: string | null;
   playerLastSeen?: PlayerLastSeenMap<TimestampLike>;
+  shuffleLock?: { player: string; expiresAt: FirebaseFirestore.Timestamp };
 }
 
 export interface GameLogEntry {
@@ -177,7 +179,7 @@ const GRID_ROWS = 3;
 const GRID_COLUMNS = 3;
 const TOTAL_PILES = GRID_ROWS * GRID_COLUMNS;
 
-const EMOJI_EFFECTS = {
+const HIGHLOW_EMOJI_EFFECTS = {
   thumbs_up: { label: 'Thumbs up', symbol: '👍' },
   high_five: { label: 'High five', symbol: '✋' },
   laughing: { label: 'Laughing', symbol: '😂' },
@@ -186,10 +188,32 @@ const EMOJI_EFFECTS = {
   uhoh: { label: 'Uh oh', symbol: '🫠' },
   higher: { label: 'Higher', symbol: '👆' },
   lower: { label: 'Lower', symbol: '👇' },
-  old_woman: { label: 'Old Maid', symbol: '👵' },
 } as const;
 
-type EmojiEffectKey = keyof typeof EMOJI_EFFECTS;
+const OLD_MAID_EMOJI_EFFECTS = {
+  old_woman: { label: 'Old Maid', symbol: '👵' },
+  laughing: { label: 'Laughing', symbol: '😂' },
+  crying: { label: 'Crying', symbol: '😭' },
+  sweating: { label: 'Sweating', symbol: '😅' },
+  uhoh: { label: 'Uh oh', symbol: '🫠' },
+  thinking: { label: 'Thinking', symbol: '🤔' },
+  angry: { label: 'Angry', symbol: '😡' },
+  shuffle: { label: 'Shuffled', symbol: '🔀' },
+} as const;
+
+type HighLowEmojiEffectKey = keyof typeof HIGHLOW_EMOJI_EFFECTS;
+type OldMaidEmojiEffectKey = keyof typeof OLD_MAID_EMOJI_EFFECTS;
+type EmojiEffectKey = HighLowEmojiEffectKey | OldMaidEmojiEffectKey;
+
+const hasHighLowEmojiEffect = (key: string): key is HighLowEmojiEffectKey =>
+  Object.prototype.hasOwnProperty.call(HIGHLOW_EMOJI_EFFECTS, key);
+
+const hasOldMaidEmojiEffect = (key: string): key is OldMaidEmojiEffectKey =>
+  Object.prototype.hasOwnProperty.call(OLD_MAID_EMOJI_EFFECTS, key);
+
+type OldMaidShuffleResult =
+  | { success: true; displayName: string }
+  | { success: false; error: string };
 
 interface EmojiEffectEntry {
   emoji: EmojiEffectKey;
@@ -1711,14 +1735,14 @@ export const sendEmojiEffect = functions
   .region(REGION)
   .https.onCall(async (data: { playerName?: string; emoji?: string }) => {
     const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
-    const emojiKey = typeof data?.emoji === 'string' ? (data.emoji.trim() as EmojiEffectKey) : '';
+    const emojiKey = typeof data?.emoji === 'string' ? data.emoji.trim() : '';
     const playerName = rawName.trim().toLowerCase();
 
     if (!playerName) {
       throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
     }
 
-    if (!emojiKey || !(emojiKey in EMOJI_EFFECTS)) {
+    if (!emojiKey || !hasHighLowEmojiEffect(emojiKey)) {
       throw new functions.https.HttpsError('invalid-argument', 'emoji is invalid');
     }
 
@@ -1739,10 +1763,11 @@ export const sendEmojiEffect = functions
         throw new functions.https.HttpsError('failed-precondition', 'player_not_in_session');
       }
 
+      const effect = HIGHLOW_EMOJI_EFFECTS[emojiKey];
       const effectEntry: EmojiEffectEntry = {
-        emoji: emojiKey as EmojiEffectKey,
-        label: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].label,
-        symbol: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].symbol,
+        emoji: emojiKey,
+        label: effect.label,
+        symbol: effect.symbol,
         player: playerName,
         displayName:
           playerRecord.displayName && playerRecord.displayName.trim()
@@ -1775,14 +1800,14 @@ export const sendOldMaidEmojiEffect = functions
   .region(REGION)
   .https.onCall(async (data: { playerName?: string; emoji?: string }) => {
     const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
-    const emojiKey = typeof data?.emoji === 'string' ? (data.emoji.trim() as EmojiEffectKey) : '';
+    const emojiKey = typeof data?.emoji === 'string' ? data.emoji.trim() : '';
     const playerName = rawName.trim().toLowerCase();
 
     if (!playerName) {
       throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
     }
 
-    if (!emojiKey || !(emojiKey in EMOJI_EFFECTS)) {
+    if (!emojiKey || !hasOldMaidEmojiEffect(emojiKey)) {
       throw new functions.https.HttpsError('invalid-argument', 'emoji is invalid');
     }
 
@@ -1801,10 +1826,11 @@ export const sendOldMaidEmojiEffect = functions
         throw new functions.https.HttpsError('failed-precondition', 'player_not_in_session');
       }
 
+      const effect = OLD_MAID_EMOJI_EFFECTS[emojiKey];
       const effectEntry: EmojiEffectEntry = {
-        emoji: emojiKey as EmojiEffectKey,
-        label: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].label,
-        symbol: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].symbol,
+        emoji: emojiKey,
+        label: effect.label,
+        symbol: effect.symbol,
         player: playerName,
         displayName:
           playerRecord.displayName && playerRecord.displayName.trim()
@@ -1830,6 +1856,109 @@ export const sendOldMaidEmojiEffect = functions
         throw error;
       }
       throw new functions.https.HttpsError('internal', 'Failed to send emoji effect');
+    }
+  });
+
+export const shuffleOldMaidHand = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string }): Promise<OldMaidShuffleResult> => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const playerName = rawName.trim().toLowerCase();
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      const result = await db.runTransaction<OldMaidShuffleResult>(async (transaction) => {
+        const snap = await transaction.get(sessionRef);
+        if (!snap.exists) {
+          return { success: false, error: 'session_missing' };
+        }
+
+        const sessionData = snap.data() as OldMaidSessionRecord;
+        if (sessionData.status !== 'active') {
+          return { success: false, error: 'not_active' };
+        }
+
+        pruneOldMaidPlayersInTransaction(sessionRef, transaction, sessionData);
+
+        const now = admin.firestore.Timestamp.now();
+        const lock = sessionData.shuffleLock;
+        if (lock?.expiresAt && lock.expiresAt.toMillis() > now.toMillis()) {
+          return { success: false, error: 'shuffle_locked' };
+        }
+
+        const lockExpiry = admin.firestore.Timestamp.fromMillis(now.toMillis() + SHUFFLE_LOCK_TTL_MS);
+
+        const players = sessionData.players.map((player) => ({
+          name: player.name,
+          displayName: player.displayName,
+          hand: [...player.hand],
+          discards: player.discards.map((pair) => ({ cards: [...pair.cards] })),
+          isOnline: player.isOnline,
+          isSafe: player.isSafe,
+          idleWarning: player.idleWarning ?? false,
+        }));
+
+        const index = players.findIndex((player) => player.name === playerName);
+        if (index === -1) {
+          return { success: false, error: 'not_in_game' };
+        }
+
+        if (players[index].hand.length < 2) {
+          return { success: false, error: 'not_enough_cards' };
+        }
+
+        players[index].hand = shuffle([...players[index].hand]);
+
+        transaction.update(sessionRef, {
+          players,
+          updatedAt: serverTimestamp(),
+          [`playerLastSeen.${playerName}`]: serverTimestamp(),
+          shuffleLock: { player: playerName, expiresAt: lockExpiry },
+        });
+
+        return {
+          success: true,
+          displayName: players[index].displayName?.trim() || players[index].name,
+        };
+      });
+
+      if (!result.success) {
+        if (result.error === 'not_in_game') {
+          throw new functions.https.HttpsError('failed-precondition', 'player_not_in_session');
+        }
+        if (result.error === 'shuffle_locked') {
+          return result;
+        }
+        return result;
+      }
+
+      const effectEntry: EmojiEffectEntry = {
+        emoji: 'shuffle',
+        label: OLD_MAID_EMOJI_EFFECTS.shuffle.label,
+        symbol: OLD_MAID_EMOJI_EFFECTS.shuffle.symbol,
+        player: playerName,
+        displayName: result.displayName,
+        timestamp: serverTimestamp(),
+      };
+
+      await oldMaidEffectsCollection().add(effectEntry);
+      await sessionRef.update({ shuffleLock: admin.firestore.FieldValue.delete() });
+      functions.logger.info('Old Maid hand shuffled', { playerName });
+      return { success: true, displayName: result.displayName };
+    } catch (error) {
+      functions.logger.error('Failed to shuffle Old Maid hand', {
+        error: error instanceof Error ? error.message : error,
+        playerName,
+      });
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError('internal', 'Unable to shuffle hand');
     }
   });
 
