@@ -132,7 +132,7 @@ export async function sendOldMaidEmojiEffect(playerName: string, emoji: OldMaidE
   }
 }
 
-export async function shuffleOldMaidHand(playerName: string): Promise<void> {
+export async function shuffleOldMaidHand(playerName: string): Promise<'ok' | 'locked'> {
   const normalized = playerName.trim().toLowerCase();
   if (!normalized) {
     throw new Error('playerName is required');
@@ -140,13 +140,13 @@ export async function shuffleOldMaidHand(playerName: string): Promise<void> {
   const response = await shuffleHandCallable({ playerName: normalized });
   const payload = response.data;
   if (payload && typeof payload === 'object' && 'success' in payload && payload.success === false) {
-    // If another shuffle is already in progress, fail silently to keep the lock opaque to the user.
     if ((payload as { error?: string }).error === 'shuffle_locked') {
-      return;
+      return 'locked';
     }
     const error = (payload as { error?: string }).error ?? 'Unable to shuffle hand';
     throw new Error(error);
   }
+  return 'ok';
 }
 
 export function subscribeToOldMaidSession(
