@@ -1,4 +1,6 @@
 export type EmojiEffectKey =
+  | 'thumbs_up'
+  | 'high_five'
   | 'laughing'
   | 'crying'
   | 'sweating'
@@ -23,8 +25,19 @@ export interface EmojiEffectEntry {
   timestamp?: { toMillis?: () => number };
 }
 
-export const EMOJI_OPTIONS: EmojiOption[] = [
-  { id: 'old_woman', label: 'Old Maid nod', symbol: '👵' },
+export const EMOJI_OPTIONS_HIGHLOW: EmojiOption[] = [
+  { id: 'thumbs_up', label: 'Thumbs up', symbol: '👍' },
+  { id: 'high_five', label: 'High five', symbol: '🙌' },
+  { id: 'laughing', label: 'Laughing', symbol: '😂' },
+  { id: 'crying', label: 'Crying', symbol: '😭' },
+  { id: 'sweating', label: 'Sweating', symbol: '😅' },
+  { id: 'uhoh', label: 'Uh oh', symbol: '🫠' },
+  { id: 'thinking', label: 'Thinking', symbol: '🤔' },
+  { id: 'angry', label: 'Angry', symbol: '😡' },
+];
+
+export const EMOJI_OPTIONS_OLDMAID: EmojiOption[] = [
+  { id: 'old_woman', label: 'Old Maid', symbol: '👵' },
   { id: 'laughing', label: 'Laughing', symbol: '😂' },
   { id: 'crying', label: 'Crying', symbol: '😭' },
   { id: 'sweating', label: 'Sweating', symbol: '😅' },

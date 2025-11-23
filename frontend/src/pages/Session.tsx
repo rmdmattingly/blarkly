@@ -17,7 +17,7 @@ import { usePresence } from '../hooks/usePresence';
 import { useWinOdds } from '../hooks/useWinOdds';
 import GameNav from '../components/GameNav';
 import EmojiStream, { type EmojiBubble } from '../components/EmojiStream';
-import { EMOJI_OPTIONS } from '../constants/emoji';
+import { EMOJI_OPTIONS_HIGHLOW } from '../constants/emoji';
 import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
 import { readStoredDisplayName, readStoredName } from '../utils/playerName';
 
@@ -501,7 +501,7 @@ useEffect(() => {
       setEmojiError('Join the session before sending reactions.');
       return;
     }
-    const option = EMOJI_OPTIONS.find((entry) => entry.id === emojiId);
+    const option = EMOJI_OPTIONS_HIGHLOW.find((entry) => entry.id === emojiId);
     if (!option) {
       return;
     }
@@ -737,7 +737,7 @@ useEffect(() => {
                 </button>
               </div>
               <div className="Session-emojiTray" role="group" aria-label="Send emoji reactions">
-                {EMOJI_OPTIONS.map((option) => (
+                {EMOJI_OPTIONS_HIGHLOW.map((option) => (
                   <button
                     key={option.id}
                     type="button"

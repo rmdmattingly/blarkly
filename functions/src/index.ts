@@ -179,13 +179,14 @@ const TOTAL_PILES = GRID_ROWS * GRID_COLUMNS;
 
 const EMOJI_EFFECTS = {
   thumbs_up: { label: 'Thumbs up', symbol: '👍' },
+  high_five: { label: 'High five', symbol: '🙌' },
   laughing: { label: 'Laughing', symbol: '😂' },
   crying: { label: 'Crying', symbol: '😭' },
   sweating: { label: 'Sweating', symbol: '😅' },
   uhoh: { label: 'Uh oh', symbol: '🫠' },
   thinking: { label: 'Thinking', symbol: '🤔' },
   angry: { label: 'Angry', symbol: '😡' },
-  old_woman: { label: 'Old Maid nod', symbol: '👵' },
+  old_woman: { label: 'Old Maid', symbol: '👵' },
 } as const;
 
 type EmojiEffectKey = keyof typeof EMOJI_EFFECTS;

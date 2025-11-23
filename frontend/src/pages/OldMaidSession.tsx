@@ -16,7 +16,7 @@ import {
 import { usePresence } from '../hooks/usePresence';
 import GameNav from '../components/GameNav';
 import OldMaidTable from '../components/OldMaidTable';
-import { EMOJI_OPTIONS, type EmojiEffectKey } from '../constants/emoji';
+import { EMOJI_OPTIONS_OLDMAID, type EmojiEffectKey } from '../constants/emoji';
 import { readStoredName } from '../utils/playerName';
 
 const DRAW_REVEAL_DELAY_MS = 800;
@@ -345,7 +345,7 @@ const OldMaidSessionPage = () => {
       setEmojiError('Join the table before sending reactions.');
       return;
     }
-    const option = EMOJI_OPTIONS.find((entry) => entry.id === emojiId);
+    const option = EMOJI_OPTIONS_OLDMAID.find((entry) => entry.id === emojiId);
     if (!option) {
       return;
     }
@@ -629,7 +629,7 @@ const OldMaidSessionPage = () => {
             )}
           </div>
           <div className="Session-emojiTray" role="group" aria-label="Send emoji reactions">
-            {EMOJI_OPTIONS.map((option) => (
+            {EMOJI_OPTIONS_OLDMAID.map((option) => (
               <button
                 key={option.id}
                 type="button"
