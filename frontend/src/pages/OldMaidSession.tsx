@@ -25,8 +25,7 @@ const DRAW_REVEAL_DELAY_MS = 800;
 const DRAW_RESULT_DISPLAY_MS = 2800;
 const DEFENSE_REVEAL_DELAY_MS = 600;
 const DEFENSE_RESULT_DISPLAY_MS = 2400;
-const SHUFFLE_PENDING_FALLBACK_MS = 6000;
-const SHUFFLE_LOCK_NUDGE_MS = 900;
+const SHUFFLE_PENDING_FALLBACK_MS = 7000;
 
 type TheftReveal = {
   cardLabel: string;
@@ -70,8 +69,8 @@ const OldMaidSessionPage = () => {
   const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
   const shuffleAwaitSignatureRef = useRef<string | null>(null);
   const shuffleReleaseTimerRef = useRef<number | null>(null);
-  const shuffleCooldownTimerRef = useRef<number | null>(null);
   const [shuffleAwaitingSync, setShuffleAwaitingSync] = useState(false);
+  const [shuffleServerLockUntil, setShuffleServerLockUntil] = useState<number | null>(null);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [shufflePending, setShufflePending] = useState(false);
   const rejoinInFlightRef = useRef(false);
@@ -183,6 +182,19 @@ const OldMaidSessionPage = () => {
     return !isSeated && noGameInProgress;
   }, [session, playerName]);
 
+  useEffect(() => {
+    if (!session?.shuffleLock?.expiresAt) {
+      setShuffleServerLockUntil(null);
+      return;
+    }
+    const expiresMs = getTimestampMs(session.shuffleLock.expiresAt);
+    if (expiresMs && expiresMs > Date.now()) {
+      setShuffleServerLockUntil(expiresMs);
+    } else {
+      setShuffleServerLockUntil(null);
+    }
+  }, [session?.shuffleLock?.expiresAt]);
+
   const handleAutoRejoin = useCallback(() => {
     if (!playerName || !shouldAutoRejoin || rejoinInFlightRef.current) {
       return;
@@ -278,7 +290,13 @@ const OldMaidSessionPage = () => {
     [rawHand]
   );
 
-  const shuffleLocked = shufflePending || shuffleAwaitingSync;
+  const shuffleLocked = useMemo(
+    () =>
+      shufflePending ||
+      shuffleAwaitingSync ||
+      (shuffleServerLockUntil !== null && shuffleServerLockUntil > Date.now()),
+    [shufflePending, shuffleAwaitingSync, shuffleServerLockUntil]
+  );
 
   useEffect(() => {
     const keys = rawHand.map((card, idx) => `${idx}-${card.label}`);
@@ -349,15 +367,8 @@ const OldMaidSessionPage = () => {
           setShufflePending(false);
         }, SHUFFLE_PENDING_FALLBACK_MS);
       } else {
-        // Locked upstream: briefly dampen spam then allow retry.
-        if (shuffleCooldownTimerRef.current) {
-          window.clearTimeout(shuffleCooldownTimerRef.current);
-        }
-        shuffleCooldownTimerRef.current = window.setTimeout(() => {
-          setShuffleAwaitingSync(false);
-          setShufflePending(false);
-          shuffleCooldownTimerRef.current = null;
-        }, SHUFFLE_LOCK_NUDGE_MS);
+        setShuffleAwaitingSync(false);
+        setShufflePending(false);
         shuffleAwaitSignatureRef.current = null;
       }
     } catch (error) {
@@ -642,9 +653,6 @@ const OldMaidSessionPage = () => {
       if (shuffleReleaseTimerRef.current) {
         window.clearTimeout(shuffleReleaseTimerRef.current);
       }
-      if (shuffleCooldownTimerRef.current) {
-        window.clearTimeout(shuffleCooldownTimerRef.current);
-      }
     };
   }, []);
 
@@ -897,6 +905,19 @@ const deriveCenterOverlay = (
       actionDisabled: !playerName || isStartingGame,
       onAction: handleStartGame,
     };
+  }
+  return null;
+};
+
+const getTimestampMs = (value: unknown): number | null => {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof (value as { toMillis?: () => number })?.toMillis === 'function') {
+    return (value as { toMillis: () => number }).toMillis();
   }
   return null;
 };

@@ -25,6 +25,7 @@ export interface OldMaidSession {
   createdAt?: unknown;
   updatedAt?: unknown;
   loser?: string | null;
+  shuffleLock?: { player: string; expiresAt?: { toMillis?: () => number } | number };
 }
 
 const CURRENT_SESSION_ID = 'current';
