@@ -3,7 +3,7 @@ import { collection, doc, limit, onSnapshot, orderBy, query, type FirestoreError
 
 import { db, functions } from '../firebaseConfig';
 import type { Card } from './highlow';
-import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
+import type { EmojiEffectEntry, OldMaidEmojiEffectKey } from '../constants/emoji';
 
 export interface OldMaidPlayer {
   name: string;
@@ -55,9 +55,14 @@ const cleanupCallable = httpsCallable<Record<string, never>, { removed?: number 
 );
 
 const sendEmojiEffectCallable = httpsCallable<
-  { playerName: string; emoji: EmojiEffectKey },
+  { playerName: string; emoji: OldMaidEmojiEffectKey },
   { success?: boolean; error?: string }
 >(functions, 'sendOldMaidEmojiEffect');
+
+const shuffleHandCallable = httpsCallable<
+  { playerName: string },
+  { success?: boolean; error?: string }
+>(functions, 'shuffleOldMaidHand');
 
 export async function joinOldMaidSession(playerName: string, displayName?: string): Promise<string> {
   const normalized = playerName.trim().toLowerCase();
@@ -114,7 +119,7 @@ export async function cleanupOldMaidPlayers(): Promise<number> {
   return data?.removed ?? 0;
 }
 
-export async function sendOldMaidEmojiEffect(playerName: string, emoji: EmojiEffectKey): Promise<void> {
+export async function sendOldMaidEmojiEffect(playerName: string, emoji: OldMaidEmojiEffectKey): Promise<void> {
   const normalized = playerName.trim().toLowerCase();
   if (!normalized) {
     throw new Error('playerName is required');
@@ -123,6 +128,23 @@ export async function sendOldMaidEmojiEffect(playerName: string, emoji: EmojiEff
   const payload = response.data;
   if (payload && typeof payload === 'object' && 'success' in payload && payload.success === false) {
     const error = (payload as { error?: string }).error ?? 'Failed to send emoji effect';
+    throw new Error(error);
+  }
+}
+
+export async function shuffleOldMaidHand(playerName: string): Promise<void> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('playerName is required');
+  }
+  const response = await shuffleHandCallable({ playerName: normalized });
+  const payload = response.data;
+  if (payload && typeof payload === 'object' && 'success' in payload && payload.success === false) {
+    // If another shuffle is already in progress, fail silently to keep the lock opaque to the user.
+    if ((payload as { error?: string }).error === 'shuffle_locked') {
+      return;
+    }
+    const error = (payload as { error?: string }).error ?? 'Unable to shuffle hand';
     throw new Error(error);
   }
 }
