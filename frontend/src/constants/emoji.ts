@@ -5,9 +5,12 @@ export type EmojiEffectKey =
   | 'crying'
   | 'sweating'
   | 'uhoh'
+  | 'thinking'
+  | 'angry'
   | 'higher'
   | 'lower'
-  | 'old_woman';
+  | 'old_woman'
+  | 'shuffle';
 
 export interface EmojiOption {
   id: EmojiEffectKey;
@@ -42,6 +45,6 @@ export const EMOJI_OPTIONS_OLDMAID: EmojiOption[] = [
   { id: 'crying', label: 'Crying', symbol: '😭' },
   { id: 'sweating', label: 'Sweating', symbol: '😅' },
   { id: 'uhoh', label: 'Uh oh', symbol: '🫠' },
-  { id: 'higher', label: 'Higher', symbol: '👆' },
-  { id: 'lower', label: 'Lower', symbol: '👇' },
+  { id: 'thinking', label: 'Thinking', symbol: '🤔' },
+  { id: 'angry', label: 'Angry', symbol: '😡' },
 ];

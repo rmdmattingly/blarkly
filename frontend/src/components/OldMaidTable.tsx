@@ -1,7 +1,7 @@
 import type React from 'react';
 import type { Card } from '../api/highlow';
 import type { OldMaidPlayer, OldMaidStatus } from '../api/oldmaid';
-import type { OldMaidEmojiEffectKey } from '../constants/emoji';
+import type { EmojiEffectKey } from '../constants/emoji';
 
 interface OldMaidTableProps {
   players: OldMaidPlayer[];
@@ -36,10 +36,9 @@ interface OldMaidTableProps {
   localHand?: Array<{ key: string; card: Card }>;
   onPromoteCard?: (key: string) => void;
   onShuffleLocalHand?: () => void;
-  shuffleLocked?: boolean;
   shufflePending?: boolean;
   shuffleError?: string | null;
-  onSendEmoji?: (emojiId: OldMaidEmojiEffectKey) => void;
+  onSendEmoji?: (emojiId: EmojiEffectKey) => void;
   emojiError?: string | null;
 }
 
@@ -70,7 +69,6 @@ const OldMaidTable = ({
   localHand = [],
   onPromoteCard,
   onShuffleLocalHand,
-  shuffleLocked = false,
   shufflePending = false,
   shuffleError = null,
   onSendEmoji,
@@ -231,7 +229,7 @@ const OldMaidTable = ({
               )}
             </div>
           ) : drawMode === 'defense' ? (
-            <div className={['OldMaid-centerPanel', 'mode-defense', shufflePending ? 'is-shuffling' : ''].filter(Boolean).join(' ')}>
+            <div className="OldMaid-centerPanel mode-defense">
               <p>
                 <strong>{defenseActorName ?? activeName}</strong> is drawing from you
               </p>
@@ -256,14 +254,15 @@ const OldMaidTable = ({
                 )}
               </div>
               {onShuffleLocalHand ? (
-                <div className="OldMaid-defenseActions">
+                <div className="OldMaid-defenseControls">
                   <button
                     type="button"
                     className="OldMaid-shuffleInline"
                     onClick={onShuffleLocalHand}
-                    disabled={shufflePending || shuffleLocked || !defenseHand?.length}
+                    disabled={shufflePending}
+                    aria-label={shufflePending ? 'Shuffling' : 'Shuffle'}
                   >
-                    {shufflePending ? 'Shuffling…' : 'Shuffle'}
+                    {shufflePending ? '🔄' : '🔀'}
                   </button>
                   {shuffleError ? <small className="OldMaid-inlineError">{shuffleError}</small> : null}
                 </div>
@@ -329,10 +328,12 @@ const getSeatLayout = (players: OldMaidPlayer[], localPlayerName: string | null)
   }
   const count = Math.max(2, ordered.length);
   const radius = 38;
+  const verticalBias = count <= 3 ? 26 : count <= 4 ? 18 : 10; // push lower seats down more when there are fewer opponents
   return Array.from({ length: count }).map((_, index) => {
     const angle = (index / count) * 2 * Math.PI - Math.PI / 2;
+    const sine = Math.sin(angle);
     const x = 50 + radius * Math.cos(angle);
-    const y = 50 + radius * Math.sin(angle);
+    const y = 50 + radius * sine + verticalBias * Math.max(0, sine);
     return {
       id: `seat-${index}`,
       player: ordered[index] ?? null,
