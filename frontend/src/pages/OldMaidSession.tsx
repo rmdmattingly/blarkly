@@ -746,6 +746,9 @@ const OldMaidSessionPage = () => {
         offenseContext={offenseReveal ? lastDrawContext : null}
         centerOverlay={centerOverlay}
         reactionEmojis={activeReactions}
+        onShuffleLocalHand={drawMode === 'defense' ? handleShuffleHand : undefined}
+        shufflePending={shufflePending}
+        shuffleError={shuffleError}
       />
       <section className="Session-card OldMaid-panel OldMaid-logPanel">
         <h2>Game Log</h2>
