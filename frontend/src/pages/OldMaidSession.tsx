@@ -24,6 +24,14 @@ const DRAW_RESULT_DISPLAY_MS = 2800;
 const DEFENSE_REVEAL_DELAY_MS = 600;
 const DEFENSE_RESULT_DISPLAY_MS = 2400;
 
+type TheftReveal = {
+  cardLabel: string;
+  by?: string;
+  visible: boolean;
+  targetId?: string;
+  phase: 'preview' | 'show';
+};
+
 const OldMaidSessionPage = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<OldMaidSession | null>(null);
@@ -38,7 +46,7 @@ const OldMaidSessionPage = () => {
   const [offenseReveal, setOffenseReveal] = useState<{ card?: Card; matched?: boolean; phase: 'preview' | 'show' } | null>(null);
   const recentDrawTimerRef = useRef<number | null>(null);
   const drawRevealDelayRef = useRef<number | null>(null);
-  const [recentTheft, setRecentTheft] = useState<{ cardLabel: string; by?: string; visible: boolean; targetId?: string } | null>(null);
+  const [recentTheft, setRecentTheft] = useState<TheftReveal | null>(null);
   const theftTimerRef = useRef<number | null>(null);
   const defenseRevealDelayRef = useRef<number | null>(null);
   const [targetHandSnapshot, setTargetHandSnapshot] = useState<Card[]>([]);
@@ -56,7 +64,6 @@ const OldMaidSessionPage = () => {
   const [emojiError, setEmojiError] = useState<string | null>(null);
   const reactionTimersRef = useRef<Record<string, number>>({});
   const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
-  const [stolenCardFlash, setStolenCardFlash] = useState<string | null>(null);
 
   usePresence(playerName || null, Boolean(session), reportOldMaidPresence);
 
@@ -199,8 +206,13 @@ const OldMaidSessionPage = () => {
   const isDefense = Boolean(
     currentDrawTarget && currentDrawTarget.name === playerName && activePlayer && activePlayer.name !== playerName
   );
-  const drawMode: 'offense' | 'defense' | null =
-    isOffense || Boolean(offenseReveal) ? 'offense' : isDefense || Boolean(recentTheft) ? 'defense' : null;
+  const drawMode: 'offense' | 'defense' | null = recentTheft
+    ? 'defense'
+    : isOffense || Boolean(offenseReveal)
+      ? 'offense'
+      : isDefense
+        ? 'defense'
+        : null;
   const effectiveOffenseSlots = offenseCardSlots ?? (isOffense ? currentDrawTarget?.hand.length ?? 0 : 0);
 
   const rawHand = useMemo(() => localPlayer?.hand ?? [], [localPlayer?.hand]);
@@ -314,25 +326,6 @@ const OldMaidSessionPage = () => {
     }, DRAW_REVEAL_DELAY_MS + DRAW_RESULT_DISPLAY_MS);
   }, [session?.status, recentDraw, offenseReveal]);
 
-  const handleReorder = useCallback((sourceKey: string, targetKey: string) => {
-    if (!sourceKey || sourceKey === targetKey) {
-      return;
-    }
-    setHandOrder((prev) => {
-      if (!prev.length) {
-        return prev;
-      }
-      const next = prev.filter((key) => key !== sourceKey);
-      const insertIndex = next.indexOf(targetKey);
-      if (insertIndex === -1) {
-        next.push(sourceKey);
-      } else {
-        next.splice(insertIndex, 0, sourceKey);
-      }
-      return next;
-    });
-  }, []);
-
   const handleStartGame = async () => {
     if (!playerName) {
       setActionError('Save a name before starting.');
@@ -365,15 +358,6 @@ const OldMaidSessionPage = () => {
       setEmojiError(message);
     }
   };
-
-  useEffect(() => {
-    if (recentTheft?.visible && recentTheft.targetId === playerName && recentTheft.cardLabel) {
-      setStolenCardFlash(recentTheft.cardLabel);
-      const timer = window.setTimeout(() => setStolenCardFlash(null), 800);
-      return () => window.clearTimeout(timer);
-    }
-    return undefined;
-  }, [recentTheft?.visible, recentTheft?.targetId, recentTheft?.cardLabel, playerName]);
 
   const handleCardSelect = async (cardIndex: number) => {
     if (!playerName) {
@@ -495,17 +479,19 @@ const OldMaidSessionPage = () => {
             if (previousLocal && currentLocal) {
               const removedCard = findRemovedCard(previousLocal.hand, currentLocal.hand);
               if (removedCard?.label) {
+                setTargetHandSnapshot(previousLocal.hand);
                 setRecentTheft({
                   cardLabel: removedCard.label,
                   by: formatPlayerLabel(actor),
                   visible: false,
                   targetId: previousLocal.name,
+                  phase: 'preview',
                 });
                 if (defenseRevealDelayRef.current) {
                   window.clearTimeout(defenseRevealDelayRef.current);
                 }
                 defenseRevealDelayRef.current = window.setTimeout(() => {
-                  setRecentTheft((prevTheft) => (prevTheft ? { ...prevTheft, visible: true } : prevTheft));
+                  setRecentTheft((prevTheft) => (prevTheft ? { ...prevTheft, visible: true, phase: 'show' } : prevTheft));
                 }, DEFENSE_REVEAL_DELAY_MS);
                 if (theftTimerRef.current) {
                   window.clearTimeout(theftTimerRef.current);
@@ -679,7 +665,7 @@ const OldMaidSessionPage = () => {
         onSelectCard={drawMode === 'offense' && isOffense ? handleCardSelect : undefined}
         offenseReveal={offenseReveal}
         defenseHand={targetHandSnapshot}
-        defenseHighlight={recentTheft?.visible ? recentTheft.cardLabel : null}
+        defenseHighlight={recentTheft ? recentTheft.cardLabel : null}
         defenseActorName={recentTheft?.by ?? activeDrawerLabel}
         loserName={session.loser ?? null}
         pairFlash={pairFlash}
@@ -688,7 +674,6 @@ const OldMaidSessionPage = () => {
         offenseContext={offenseReveal ? lastDrawContext : null}
         centerOverlay={centerOverlay}
         reactionEmojis={activeReactions}
-        stolenCardFlash={stolenCardFlash}
       />
       <section className="Session-card OldMaid-panel OldMaid-logPanel">
         <h2>Game Log</h2>

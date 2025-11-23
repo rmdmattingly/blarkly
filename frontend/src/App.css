@@ -1555,6 +1555,68 @@ body {
   }
 }
 
+.OldMaid-defenseReveal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.OldMaid-defenseReveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.OldMaid-defenseRevealCard {
+  width: 46px;
+  height: 62px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #ffe4e6, #fecdd3);
+  box-shadow: 0 12px 22px rgba(248, 113, 113, 0.35);
+  position: relative;
+  perspective: 800px;
+}
+
+.OldMaid-defenseCardInner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  transform-style: preserve-3d;
+  transition: transform 0.45s ease;
+  background: inherit;
+}
+
+.OldMaid-defenseRevealCard.is-flipped .OldMaid-defenseCardInner {
+  transform: rotateY(180deg);
+}
+
+.OldMaid-defenseCardFace {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backface-visibility: hidden;
+}
+
+.OldMaid-defenseCardFace.is-front {
+  transform: rotateY(180deg);
+}
+
 .OldMaid-centerReveal {
   margin-top: 0.35rem;
   display: inline-flex;

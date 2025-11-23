@@ -23,7 +23,7 @@ interface OldMaidTableProps {
   loserName?: string | null;
   pairFlash?: { playerName: string; cards: Card[] } | null;
   recentDraw?: { from?: string; cardLabel?: string; matched?: boolean; visible?: boolean } | null;
-  recentTheft?: { cardLabel: string; by?: string; visible?: boolean; targetId?: string } | null;
+  recentTheft?: { cardLabel: string; by?: string; visible?: boolean; targetId?: string; phase?: 'preview' | 'show' } | null;
   offenseContext?: { actor: string; target: string; targetId?: string } | null;
   centerOverlay?: {
     title: string;
@@ -38,7 +38,6 @@ interface OldMaidTableProps {
   onShuffleLocalHand?: () => void;
   onSendEmoji?: (emojiId: EmojiEffectKey) => void;
   emojiError?: string | null;
-  stolenCardFlash?: string | null;
 }
 
 const OldMaidTable = ({
@@ -70,7 +69,6 @@ const OldMaidTable = ({
   onShuffleLocalHand,
   onSendEmoji,
   emojiError,
-  stolenCardFlash,
 }: OldMaidTableProps) => {
   const layout = getSeatLayout(players, localPlayerName);
   const activeName = offenseContext?.actor ?? activeDrawer?.displayName ?? activeDrawer?.name ?? 'Player';
@@ -129,11 +127,11 @@ const OldMaidTable = ({
                     {seat.player.name === localPlayerName ? ' (you)' : ''}
                   </div>
                   {seat.player.name !== localPlayerName ? (
-                    <div className="OldMaid-seatCount">
-                      {seat.player.hand.length
-                        ? seat.player.hand.map((_, idx) => <span key={`${seat.player.name}-count-${idx}`}>🂠</span>)
-                        : <span>—</span>}
-                    </div>
+                  <div className="OldMaid-seatCount">
+                    {seat.player.hand.length
+                      ? seat.player.hand.map((_, idx) => <span key={`${seat.player.name}-count-${idx}`}>🂠</span>)
+                      : <span>—</span>}
+                  </div>
                   ) : null}
                   {seat.player.isSafe ? <span className="OldMaid-safeBadge">Safe</span> : null}
                   {pairFlash && seat.player.name === pairFlash.playerName ? (
@@ -251,7 +249,30 @@ const OldMaidTable = ({
                   <p className="OldMaid-centerHint">No cards remaining.</p>
                 )}
               </div>
-              {defenseHighlight ? (
+              {recentTheft ? (
+                <div className={`OldMaid-defenseReveal ${recentTheft.phase === 'show' ? 'is-visible' : ''}`}>
+                  <div
+                    className={[
+                      'OldMaid-defenseRevealCard',
+                      recentTheft.phase === 'show' ? 'is-flipped' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                  >
+                    <span className="OldMaid-defenseCardInner">
+                      <span className="OldMaid-defenseCardFace is-back" aria-hidden="true">
+                        🂠
+                      </span>
+                      <span className="OldMaid-defenseCardFace is-front">{recentTheft.cardLabel}</span>
+                    </span>
+                  </div>
+                  <small className="OldMaid-centerHint">
+                    {recentTheft.phase === 'show'
+                      ? `${recentTheft.cardLabel} went to ${recentTheft.by ?? 'your opponent'}`
+                      : 'Revealing the card…'}
+                  </small>
+                </div>
+              ) : defenseHighlight ? (
                 <small className="OldMaid-centerHint">{defenseHighlight} was taken.</small>
               ) : (
                 <small className="OldMaid-centerHint">Stay ready…</small>
