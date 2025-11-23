@@ -184,6 +184,8 @@ const EMOJI_EFFECTS = {
   crying: { label: 'Crying', symbol: '😭' },
   sweating: { label: 'Sweating', symbol: '😅' },
   uhoh: { label: 'Uh oh', symbol: '🫠' },
+  thinking: { label: 'Thinking', symbol: '🤔' },
+  angry: { label: 'Angry', symbol: '😡' },
   higher: { label: 'Higher', symbol: '👆' },
   lower: { label: 'Lower', symbol: '👇' },
   old_woman: { label: 'Old Maid', symbol: '👵' },
