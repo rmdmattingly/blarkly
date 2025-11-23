@@ -1,7 +1,7 @@
 import type React from 'react';
 import type { Card } from '../api/highlow';
 import type { OldMaidPlayer, OldMaidStatus } from '../api/oldmaid';
-import type { EmojiEffectKey } from '../constants/emoji';
+import type { OldMaidEmojiEffectKey } from '../constants/emoji';
 
 interface OldMaidTableProps {
   players: OldMaidPlayer[];
@@ -36,7 +36,10 @@ interface OldMaidTableProps {
   localHand?: Array<{ key: string; card: Card }>;
   onPromoteCard?: (key: string) => void;
   onShuffleLocalHand?: () => void;
-  onSendEmoji?: (emojiId: EmojiEffectKey) => void;
+  shuffleLocked?: boolean;
+  shufflePending?: boolean;
+  shuffleError?: string | null;
+  onSendEmoji?: (emojiId: OldMaidEmojiEffectKey) => void;
   emojiError?: string | null;
 }
 
@@ -67,6 +70,9 @@ const OldMaidTable = ({
   localHand = [],
   onPromoteCard,
   onShuffleLocalHand,
+  shuffleLocked = false,
+  shufflePending = false,
+  shuffleError = null,
   onSendEmoji,
   emojiError,
 }: OldMaidTableProps) => {
@@ -225,7 +231,7 @@ const OldMaidTable = ({
               )}
             </div>
           ) : drawMode === 'defense' ? (
-            <div className="OldMaid-centerPanel mode-defense">
+            <div className={['OldMaid-centerPanel', 'mode-defense', shufflePending ? 'is-shuffling' : ''].filter(Boolean).join(' ')}>
               <p>
                 <strong>{defenseActorName ?? activeName}</strong> is drawing from you
               </p>
@@ -249,6 +255,19 @@ const OldMaidTable = ({
                   <p className="OldMaid-centerHint">No cards remaining.</p>
                 )}
               </div>
+              {onShuffleLocalHand ? (
+                <div className="OldMaid-defenseActions">
+                  <button
+                    type="button"
+                    className="OldMaid-shuffleInline"
+                    onClick={onShuffleLocalHand}
+                    disabled={shufflePending || shuffleLocked || !defenseHand?.length}
+                  >
+                    {shufflePending ? 'Shuffling…' : 'Shuffle'}
+                  </button>
+                  {shuffleError ? <small className="OldMaid-inlineError">{shuffleError}</small> : null}
+                </div>
+              ) : null}
               {recentTheft ? (
                 <div className={`OldMaid-defenseReveal ${recentTheft.phase === 'show' ? 'is-visible' : ''}`}>
                   <div

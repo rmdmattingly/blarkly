@@ -791,6 +791,7 @@ const OldMaidSessionPage = () => {
         centerOverlay={centerOverlay}
         reactionEmojis={activeReactions}
         onShuffleLocalHand={drawMode === 'defense' ? handleShuffleHand : undefined}
+        shuffleLocked={shuffleLocked}
         shufflePending={shufflePending}
         shuffleError={drawMode === 'defense' ? shuffleError : null}
       />
