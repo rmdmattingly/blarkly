@@ -7,7 +7,8 @@ export type EmojiEffectKey =
   | 'uhoh'
   | 'higher'
   | 'lower'
-  | 'old_woman';
+  | 'old_woman'
+  | 'shuffle';
 
 export interface EmojiOption {
   id: EmojiEffectKey;

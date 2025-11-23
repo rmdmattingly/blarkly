@@ -3,7 +3,7 @@ import { collection, doc, limit, onSnapshot, orderBy, query, type FirestoreError
 
 import { db, functions } from '../firebaseConfig';
 import type { Card } from './highlow';
-import type { EmojiEffectEntry, OldMaidEmojiEffectKey } from '../constants/emoji';
+import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
 
 export interface OldMaidPlayer {
   name: string;
@@ -56,7 +56,7 @@ const cleanupCallable = httpsCallable<Record<string, never>, { removed?: number 
 );
 
 const sendEmojiEffectCallable = httpsCallable<
-  { playerName: string; emoji: OldMaidEmojiEffectKey },
+  { playerName: string; emoji: EmojiEffectKey },
   { success?: boolean; error?: string }
 >(functions, 'sendOldMaidEmojiEffect');
 
@@ -120,7 +120,7 @@ export async function cleanupOldMaidPlayers(): Promise<number> {
   return data?.removed ?? 0;
 }
 
-export async function sendOldMaidEmojiEffect(playerName: string, emoji: OldMaidEmojiEffectKey): Promise<void> {
+export async function sendOldMaidEmojiEffect(playerName: string, emoji: EmojiEffectKey): Promise<void> {
   const normalized = playerName.trim().toLowerCase();
   if (!normalized) {
     throw new Error('playerName is required');
