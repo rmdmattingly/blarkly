@@ -132,6 +132,14 @@ const OldMaidSessionPage = () => {
     }
     const unsubscribe = subscribeToOldMaidSession(
       (data) => {
+        if (playerName) {
+          const player = data.players.find((p) => p.name === playerName);
+          const summary = player ? player.hand.map((card) => card.label).join(',') : 'missing';
+          console.debug('[OldMaid] session update', {
+            status: data.status,
+            handSummary: summary,
+          });
+        }
         setSession(data);
         setLoading(false);
         setError(null);
@@ -144,7 +152,7 @@ const OldMaidSessionPage = () => {
     return () => {
       unsubscribe();
     };
-  }, [sessionId]);
+  }, [playerName, sessionId]);
 
   useEffect(() => {
     const unsubscribe = subscribeToOldMaidEmojiEffects((entry) => {
@@ -314,6 +322,9 @@ const OldMaidSessionPage = () => {
     }
     setShufflePending(true);
     setShuffleError(null);
+    console.debug('[OldMaid] shuffle click', {
+      handBefore: orderedHand.map((entry) => entry.card.label).join(','),
+    });
     try {
       await shuffleOldMaidHand(playerName);
       applyReactionEmoji(playerName, '🔀', Date.now(), 2000);
@@ -324,7 +335,7 @@ const OldMaidSessionPage = () => {
     } finally {
       setShufflePending(false);
     }
-  }, [applyReactionEmoji, orderedHand.length, playerName, shufflePending]);
+  }, [applyReactionEmoji, orderedHand, playerName, shufflePending]);
 
   const activeDrawerLabel = formatPlayerLabel(activePlayer ?? undefined);
 

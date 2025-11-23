@@ -1885,12 +1885,22 @@ export const shuffleOldMaidHand = functions
           return { success: false, error: 'not_enough_cards' };
         }
 
+        functions.logger.info('Old Maid shuffle requested', {
+          playerName,
+          handBefore: players[index].hand.map((card) => card.label),
+        });
+
         players[index].hand = shuffle([...players[index].hand]);
 
         transaction.update(sessionRef, {
           players,
           updatedAt: serverTimestamp(),
           [`playerLastSeen.${playerName}`]: serverTimestamp(),
+        });
+
+        functions.logger.info('Old Maid shuffle applied', {
+          playerName,
+          handAfter: players[index].hand.map((card) => card.label),
         });
 
         return {
