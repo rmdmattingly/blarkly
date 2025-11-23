@@ -1,5 +1,7 @@
+import type React from 'react';
 import type { Card } from '../api/highlow';
 import type { OldMaidPlayer, OldMaidStatus } from '../api/oldmaid';
+import type { EmojiEffectKey } from '../constants/emoji';
 
 interface OldMaidTableProps {
   players: OldMaidPlayer[];
@@ -30,6 +32,13 @@ interface OldMaidTableProps {
     actionDisabled?: boolean;
     onAction?: () => void;
   } | null;
+  reactionEmojis?: Record<string, { symbol: string; startedAt: number; duration: number }>;
+  localHand?: Array<{ key: string; card: Card }>;
+  onPromoteCard?: (key: string) => void;
+  onShuffleLocalHand?: () => void;
+  onSendEmoji?: (emojiId: EmojiEffectKey) => void;
+  emojiError?: string | null;
+  stolenCardFlash?: string | null;
 }
 
 const OldMaidTable = ({
@@ -55,6 +64,13 @@ const OldMaidTable = ({
   recentTheft,
   offenseContext,
   centerOverlay,
+  reactionEmojis = {},
+  localHand = [],
+  onPromoteCard,
+  onShuffleLocalHand,
+  onSendEmoji,
+  emojiError,
+  stolenCardFlash,
 }: OldMaidTableProps) => {
   const layout = getSeatLayout(players, localPlayerName);
   const activeName = offenseContext?.actor ?? activeDrawer?.displayName ?? activeDrawer?.name ?? 'Player';
@@ -65,62 +81,80 @@ const OldMaidTable = ({
   return (
     <div className="OldMaid-tableWrapper">
       <div className="OldMaid-table">
-        {layout.map((seat) => (
-          <div
-            key={seat.id}
-            className={[
-              'OldMaid-seat',
-              seat.player?.isOnline ? 'online' : 'offline',
-              isTurn(players, seat.player, currentTurnIndex) ? 'turn' : '',
-              seat.player && highlightedTargetName === seat.player.name ? 'target' : '',
-              pairFlash && seat.player?.name === pairFlash.playerName ? 'pair-flash' : '',
-              seat.player && recentTheft?.visible && seat.player.name === recentTheft.targetId ? 'was-targeted' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            style={{ left: `${seat.x}%`, top: `${seat.y}%` }}
-          >
-            {seat.player ? (
-              <>
-                <div className={`OldMaid-avatarIcon ${seat.player.isOnline ? 'online' : 'offline'}`} aria-hidden="true">
-                  {status === 'complete' && loserName === seat.player.name
-                    ? '👵'
-                    : seat.player.isSafe
-                      ? '😌'
-                      : seat.player.name === localPlayerName
-                        ? '🙂'
-                        : '🧑'}
-                </div>
-                <div className="OldMaid-seatName">
-                  {seat.player.displayName ?? seat.player.name}
-                  {seat.player.name === localPlayerName ? ' (you)' : ''}
-                </div>
-                {seat.player.name !== localPlayerName ? (
-                  <div className="OldMaid-seatCount">
-                    {seat.player.hand.length
-                      ? seat.player.hand.map((_, idx) => <span key={`${seat.player.name}-count-${idx}`}>🂠</span>)
-                      : <span>—</span>}
+        {layout.map((seat) => {
+          const reactionInfo = seat.player ? reactionEmojis[seat.player.name] : undefined;
+          const reactionEmoji = reactionInfo?.symbol;
+          const reactionDuration = reactionInfo?.duration ?? 0;
+          return (
+            <div
+              key={seat.id}
+              className={[
+                'OldMaid-seat',
+                seat.player?.isOnline ? 'online' : 'offline',
+                isTurn(players, seat.player, currentTurnIndex) ? 'turn' : '',
+                seat.player && highlightedTargetName === seat.player.name ? 'target' : '',
+                pairFlash && seat.player?.name === pairFlash.playerName ? 'pair-flash' : '',
+                seat.player && recentTheft?.visible && seat.player.name === recentTheft.targetId ? 'was-targeted' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              style={{ left: `${seat.x}%`, top: `${seat.y}%` }}
+            >
+              {seat.player ? (
+                <>
+                  <div
+                    className={`OldMaid-avatarIcon ${seat.player.isOnline ? 'online' : 'offline'} ${reactionEmoji ? 'has-reaction' : ''}`}
+                    aria-hidden="true"
+                    style={
+                      reactionEmoji
+                        ? ({ '--reaction-duration': `${Math.max(reactionDuration, 0)}ms` } as React.CSSProperties)
+                        : undefined
+                    }
+                  >
+                    <span className="OldMaid-avatarEmoji">
+                      {reactionEmoji
+                        ? reactionEmoji
+                        : status === 'complete' && loserName === seat.player.name
+                          ? '👵'
+                          : seat.player.isSafe
+                            ? '😌'
+                            : seat.player.name === localPlayerName
+                              ? '🙂'
+                              : '🧑'}
+                    </span>
+                    {reactionEmoji ? <span className="OldMaid-reactionRing" aria-hidden="true" /> : null}
                   </div>
-                ) : null}
-                {seat.player.isSafe ? <span className="OldMaid-safeBadge">Safe</span> : null}
-                {pairFlash && seat.player.name === pairFlash.playerName ? (
-                  <div className="OldMaid-pairToast">
-                    <span>{pairFlash.cards.map((card) => card.label).join(' ')}</span>
-                    <small>Pair removed</small>
+                  <div className="OldMaid-seatName">
+                    {seat.player.displayName ?? seat.player.name}
+                    {seat.player.name === localPlayerName ? ' (you)' : ''}
                   </div>
-                ) : null}
-                {seat.player && recentTheft?.visible && seat.player.name === recentTheft.targetId ? (
-                  <div className="OldMaid-defenseToast">
-                    <span>{recentTheft.cardLabel}</span>
-                    <small>Taken by {recentTheft.by ?? 'opponent'}</small>
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <div className="OldMaid-seatEmpty">Waiting…</div>
-            )}
-          </div>
-        ))}
+                  {seat.player.name !== localPlayerName ? (
+                    <div className="OldMaid-seatCount">
+                      {seat.player.hand.length
+                        ? seat.player.hand.map((_, idx) => <span key={`${seat.player.name}-count-${idx}`}>🂠</span>)
+                        : <span>—</span>}
+                    </div>
+                  ) : null}
+                  {seat.player.isSafe ? <span className="OldMaid-safeBadge">Safe</span> : null}
+                  {pairFlash && seat.player.name === pairFlash.playerName ? (
+                    <div className="OldMaid-pairToast">
+                      <span>{pairFlash.cards.map((card) => card.label).join(' ')}</span>
+                      <small>Pair removed</small>
+                    </div>
+                  ) : null}
+                  {seat.player && recentTheft?.visible && seat.player.name === recentTheft.targetId ? (
+                    <div className="OldMaid-defenseToast">
+                      <span>{recentTheft.cardLabel}</span>
+                      <small>Taken by {recentTheft.by ?? 'opponent'}</small>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="OldMaid-seatEmpty">Waiting…</div>
+              )}
+            </div>
+          );
+        })}
 
         <div className="OldMaid-tableCenter">
           {drawMode === 'offense' ? (

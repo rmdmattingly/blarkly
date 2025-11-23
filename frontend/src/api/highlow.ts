@@ -11,6 +11,7 @@ import {
 } from 'firebase/firestore';
 
 import { db, functions } from '../firebaseConfig';
+import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
 
 export type Suit = 'hearts' | 'diamonds' | 'clubs' | 'spades';
 
@@ -64,16 +65,6 @@ export interface GameSession {
   playerLastSeen?: Record<string, Timestamp | undefined>;
   outcome?: 'players' | 'deck' | null;
 }
-
-export type EmojiEffectKey =
-  | 'thumbs_up'
-  | 'laughing'
-  | 'crying'
-  | 'sweating'
-  | 'uhoh'
-  | 'thinking'
-  | 'angry'
-  | 'high_five';
 
 type GameSessionDoc = Omit<GameSession, 'id'> &
   Partial<{
@@ -284,16 +275,6 @@ export function subscribeToGameLog(onEntry: (entry: GameLogEntry) => void): () =
       }
     });
   });
-}
-
-export interface EmojiEffectEntry {
-  id?: string;
-  emoji: EmojiEffectKey;
-  label: string;
-  symbol: string;
-  player: string;
-  displayName?: string;
-  timestamp?: Timestamp;
 }
 
 interface EmojiEffectSubscriptionOptions {

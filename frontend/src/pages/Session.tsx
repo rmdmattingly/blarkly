@@ -2,18 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import type { SVGProps } from 'react';
 import { useParams, Link } from 'react-router-dom';
 
-import type {
-  Card,
-  GameSession,
-  GameStatus,
-  Player,
-  GuessChoice,
-  GuessResult,
-  GameLogEntry,
-  TablePile,
-  EmojiEffectEntry,
-  EmojiEffectKey,
-} from '../api/highlow';
+import type { Card, GameSession, GameStatus, Player, GuessChoice, GuessResult, GameLogEntry, TablePile } from '../api/highlow';
 import {
   subscribeToCurrentSession,
   makeGuess,
@@ -27,6 +16,9 @@ import {
 import { usePresence } from '../hooks/usePresence';
 import { useWinOdds } from '../hooks/useWinOdds';
 import GameNav from '../components/GameNav';
+import EmojiStream, { type EmojiBubble } from '../components/EmojiStream';
+import { EMOJI_OPTIONS } from '../constants/emoji';
+import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
 import { readStoredDisplayName, readStoredName } from '../utils/playerName';
 
 const TURN_TIMEOUT_MS = 3 * 60 * 1000;
@@ -49,17 +41,6 @@ const PLACEHOLDER_PILES: TablePile[] = Array.from({ length: 9 }).map((_, index) 
   cards: [] as Card[],
   isFaceUp: false,
 }));
-
-const EMOJI_OPTIONS: Array<{ id: EmojiEffectKey; label: string; symbol: string }> = [
-  { id: 'thumbs_up', label: 'Thumbs up', symbol: '👍' },
-  { id: 'laughing', label: 'Laughing', symbol: '😂' },
-  { id: 'crying', label: 'Crying', symbol: '😭' },
-  { id: 'sweating', label: 'Sweating', symbol: '😅' },
-  { id: 'uhoh', label: 'Uh oh', symbol: '🫠' },
-  { id: 'thinking', label: 'Thinking', symbol: '🤔' },
-  { id: 'angry', label: 'Angry', symbol: '😡' },
-  { id: 'high_five', label: 'High five', symbol: '✋' },
-];
 
 const Session = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -844,29 +825,6 @@ useEffect(() => {
 };
 
 export default Session;
-
-interface EmojiBubble {
-  id: string;
-  emoji: string;
-  label: string;
-  player: string;
-}
-
-const EmojiStream = ({ effects }: { effects: EmojiBubble[] }) => (
-  <div className="Session-effectsStream" aria-live="polite">
-    {effects.map((effect) => (
-      <div key={effect.id} className="Session-effectBubble">
-        <span className="Session-effectEmoji" aria-hidden="true">
-          {effect.emoji}
-        </span>
-        <div className="Session-effectText">
-          <strong>{effect.player}</strong>
-          <span>{effect.label}</span>
-        </div>
-      </div>
-    ))}
-  </div>
-);
 
 type IconProps = SVGProps<SVGSVGElement>;
 

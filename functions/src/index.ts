@@ -23,7 +23,7 @@ const CURRENT_SESSION_ID = 'current';
 const OLD_MAID_DOC = 'oldmaid';
 const OLD_MAID_CURRENT_SESSION_ID = 'current';
 const TURN_TIMEOUT_SECONDS = 180;
-const STALE_PLAYER_SECONDS = 60;
+const STALE_PLAYER_SECONDS = 3 * 60;
 const WAITING_ROOM_PLAYER_SECONDS = 5 * 60;
 const IDLE_WARNING_BUFFER_SECONDS = 30;
 const STALE_GAME_SECONDS = 60 * 60;
@@ -185,7 +185,7 @@ const EMOJI_EFFECTS = {
   uhoh: { label: 'Uh oh', symbol: '🫠' },
   thinking: { label: 'Thinking', symbol: '🤔' },
   angry: { label: 'Angry', symbol: '😡' },
-  high_five: { label: 'High five', symbol: '✋' },
+  old_woman: { label: 'Old Maid nod', symbol: '👵' },
 } as const;
 
 type EmojiEffectKey = keyof typeof EMOJI_EFFECTS;
@@ -518,11 +518,33 @@ const pruneOldMaidPlayersInTransaction = (
       delete updatedLastSeen[name];
     });
   }
-  transaction.update(sessionRef, {
+  const updates: Partial<OldMaidSessionRecord> & {
+    players: OldMaidPlayerWrite[];
+    playerLastSeen: PlayerLastSeenMap<TimestampLike>;
+  } = {
     players: filtered,
     playerLastSeen: updatedLastSeen,
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  if (sessionData.status === 'active') {
+    if (filtered.length <= 1) {
+      updates.status = 'complete';
+      updates.loser = filtered[0]?.name ?? null;
+      updates.turnIndex = 0;
+      sessionData.status = 'complete';
+      sessionData.loser = filtered[0]?.name ?? null;
+      sessionData.turnIndex = 0;
+    } else if (sessionData.turnIndex >= filtered.length) {
+      updates.turnIndex = sessionData.turnIndex % filtered.length;
+      sessionData.turnIndex = updates.turnIndex;
+    }
+  } else if (!filtered.length && sessionData.turnIndex !== 0) {
+    updates.turnIndex = 0;
+    sessionData.turnIndex = 0;
+  }
+
+  transaction.update(sessionRef, updates);
   sessionData.players = filtered;
   sessionData.playerLastSeen = updatedLastSeen;
   return removed.length;
@@ -709,6 +731,9 @@ const sessionsCollection = () =>
 
 const effectsCollection = () =>
   sessionsCollection().doc(CURRENT_SESSION_ID).collection('effects');
+
+const oldMaidEffectsCollection = () =>
+  oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID).collection('effects');
 
 const oldMaidSessionsCollection = () =>
   db.collection(GAMES_COLLECTION).doc(OLD_MAID_DOC).collection(SESSIONS_SUBCOLLECTION);
@@ -1734,6 +1759,68 @@ export const sendEmojiEffect = functions
       return { success: true };
     } catch (error) {
       functions.logger.error('Failed to send emoji effect', {
+        error: error instanceof Error ? error.message : error,
+        emoji: emojiKey,
+        playerName,
+      });
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+      throw new functions.https.HttpsError('internal', 'Failed to send emoji effect');
+    }
+  });
+
+export const sendOldMaidEmojiEffect = functions
+  .region(REGION)
+  .https.onCall(async (data: { playerName?: string; emoji?: string }) => {
+    const rawName = typeof data?.playerName === 'string' ? data.playerName : '';
+    const emojiKey = typeof data?.emoji === 'string' ? (data.emoji.trim() as EmojiEffectKey) : '';
+    const playerName = rawName.trim().toLowerCase();
+
+    if (!playerName) {
+      throw new functions.https.HttpsError('invalid-argument', 'playerName is required');
+    }
+
+    if (!emojiKey || !(emojiKey in EMOJI_EFFECTS)) {
+      throw new functions.https.HttpsError('invalid-argument', 'emoji is invalid');
+    }
+
+    const sessionRef = oldMaidSessionsCollection().doc(OLD_MAID_CURRENT_SESSION_ID);
+
+    try {
+      const snap = await sessionRef.get();
+      if (!snap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Session not found');
+      }
+
+      const sessionData = snap.data() as OldMaidSessionRecord;
+      const playerRecord = sessionData.players.find((player) => player.name === playerName);
+
+      if (!playerRecord) {
+        throw new functions.https.HttpsError('failed-precondition', 'player_not_in_session');
+      }
+
+      const effectEntry: EmojiEffectEntry = {
+        emoji: emojiKey as EmojiEffectKey,
+        label: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].label,
+        symbol: EMOJI_EFFECTS[emojiKey as EmojiEffectKey].symbol,
+        player: playerName,
+        displayName:
+          playerRecord.displayName && playerRecord.displayName.trim()
+            ? playerRecord.displayName
+            : playerRecord.name,
+        timestamp: serverTimestamp(),
+      };
+
+      await oldMaidEffectsCollection().add(effectEntry);
+      functions.logger.info('Old Maid emoji effect recorded', {
+        emoji: emojiKey,
+        playerName,
+      });
+
+      return { success: true };
+    } catch (error) {
+      functions.logger.error('Failed to send Old Maid emoji effect', {
         error: error instanceof Error ? error.message : error,
         emoji: emojiKey,
         playerName,

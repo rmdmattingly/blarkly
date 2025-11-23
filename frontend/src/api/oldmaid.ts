@@ -1,8 +1,9 @@
 import { httpsCallable } from 'firebase/functions';
-import { doc, onSnapshot, type FirestoreError } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, orderBy, query, type FirestoreError } from 'firebase/firestore';
 
 import { db, functions } from '../firebaseConfig';
 import type { Card } from './highlow';
+import type { EmojiEffectEntry, EmojiEffectKey } from '../constants/emoji';
 
 export interface OldMaidPlayer {
   name: string;
@@ -52,6 +53,11 @@ const cleanupCallable = httpsCallable<Record<string, never>, { removed?: number 
   functions,
   'cleanupOldMaidPlayers'
 );
+
+const sendEmojiEffectCallable = httpsCallable<
+  { playerName: string; emoji: EmojiEffectKey },
+  { success?: boolean; error?: string }
+>(functions, 'sendOldMaidEmojiEffect');
 
 export async function joinOldMaidSession(playerName: string, displayName?: string): Promise<string> {
   const normalized = playerName.trim().toLowerCase();
@@ -108,6 +114,19 @@ export async function cleanupOldMaidPlayers(): Promise<number> {
   return data?.removed ?? 0;
 }
 
+export async function sendOldMaidEmojiEffect(playerName: string, emoji: EmojiEffectKey): Promise<void> {
+  const normalized = playerName.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('playerName is required');
+  }
+  const response = await sendEmojiEffectCallable({ playerName: normalized, emoji });
+  const payload = response.data;
+  if (payload && typeof payload === 'object' && 'success' in payload && payload.success === false) {
+    const error = (payload as { error?: string }).error ?? 'Failed to send emoji effect';
+    throw new Error(error);
+  }
+}
+
 export function subscribeToOldMaidSession(
   onUpdate: (session: OldMaidSession) => void,
   onError?: (error: FirestoreError | Error) => void
@@ -135,4 +154,27 @@ export function subscribeToOldMaidSession(
       }
     }
   );
+}
+
+export function subscribeToOldMaidEmojiEffects(
+  onEntry: (entry: EmojiEffectEntry) => void,
+  options?: { onReady?: () => void }
+): () => void {
+  const effectsRef = collection(db, 'games', 'oldmaid', 'sessions', CURRENT_SESSION_ID, 'effects');
+  const effectsQuery = query(effectsRef, orderBy('timestamp', 'desc'), limit(30));
+  let initialBatchPending = true;
+
+  return onSnapshot(effectsQuery, (snapshot) => {
+    snapshot.docChanges().forEach((change) => {
+      if (change.type === 'added') {
+        const data = change.doc.data() as EmojiEffectEntry;
+        onEntry({ ...data, id: change.doc.id });
+      }
+    });
+
+    if (initialBatchPending) {
+      initialBatchPending = false;
+      options?.onReady?.();
+    }
+  });
 }

@@ -10,10 +10,13 @@ import {
   reportOldMaidPresence,
   startOldMaidGame,
   subscribeToOldMaidSession,
+  sendOldMaidEmojiEffect,
+  subscribeToOldMaidEmojiEffects,
 } from '../api/oldmaid';
 import { usePresence } from '../hooks/usePresence';
 import GameNav from '../components/GameNav';
 import OldMaidTable from '../components/OldMaidTable';
+import { EMOJI_OPTIONS, type EmojiEffectKey } from '../constants/emoji';
 import { readStoredName } from '../utils/playerName';
 
 const DRAW_REVEAL_DELAY_MS = 800;
@@ -42,7 +45,6 @@ const OldMaidSessionPage = () => {
   const [pairFlash, setPairFlash] = useState<{ playerName: string; cards: Card[] } | null>(null);
   const pairTimerRef = useRef<number | null>(null);
   const [handOrder, setHandOrder] = useState<string[]>([]);
-  const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [lastDrawContext, setLastDrawContext] = useState<{ actor: string; target: string; targetId?: string } | null>(null);
   const [offenseCardSlots, setOffenseCardSlots] = useState<number | null>(null);
   const [offenseSelectionIndex, setOffenseSelectionIndex] = useState<number | null>(null);
@@ -51,8 +53,63 @@ const OldMaidSessionPage = () => {
   const [startingGame, setStartingGame] = useState(false);
   const [finaleHoldActive, setFinaleHoldActive] = useState(false);
   const finaleHoldTimerRef = useRef<number | null>(null);
+  const [emojiError, setEmojiError] = useState<string | null>(null);
+  const reactionTimersRef = useRef<Record<string, number>>({});
+  const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
+  const [stolenCardFlash, setStolenCardFlash] = useState<string | null>(null);
 
   usePresence(playerName || null, Boolean(session), reportOldMaidPresence);
+
+  const clearReactionEmoji = useCallback((player: string) => {
+    setActiveReactions((prev) => {
+      if (!(player in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[player];
+      return next;
+    });
+  }, []);
+
+  const scheduleReactionReset = useCallback(
+    (player: string, duration: number) => {
+      if (reactionTimersRef.current[player]) {
+        window.clearTimeout(reactionTimersRef.current[player]);
+      }
+      const clamped = Math.max(duration, 0);
+      if (clamped === 0) {
+        clearReactionEmoji(player);
+        return;
+      }
+      reactionTimersRef.current[player] = window.setTimeout(() => {
+        clearReactionEmoji(player);
+        delete reactionTimersRef.current[player];
+      }, clamped);
+    },
+    [clearReactionEmoji]
+  );
+
+  const applyReactionEmoji = useCallback(
+    (player: string, symbol: string, startedAt?: number, durationMs = 8000) => {
+      const normalized = player?.trim().toLowerCase();
+      if (!normalized || !symbol) {
+        return;
+      }
+      const started = typeof startedAt === 'number' ? startedAt : Date.now();
+      const elapsed = Math.max(0, Date.now() - started);
+      const remaining = Math.max(durationMs - elapsed, 0);
+      if (remaining <= 0) {
+        clearReactionEmoji(normalized);
+        return;
+      }
+      setActiveReactions((prev) => ({
+        ...prev,
+        [normalized]: { symbol, startedAt: started, duration: remaining },
+      }));
+      scheduleReactionReset(normalized, remaining);
+    },
+    [clearReactionEmoji, scheduleReactionReset]
+  );
 
   useEffect(() => {
     if (!sessionId) {
@@ -75,6 +132,21 @@ const OldMaidSessionPage = () => {
       unsubscribe();
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToOldMaidEmojiEffects((entry) => {
+      const normalizedPlayer = entry.player?.trim().toLowerCase() ?? '';
+      const symbol = entry.symbol ?? '✨';
+      const startedAt = entry.timestamp?.toMillis?.() ?? Date.now();
+      applyReactionEmoji(normalizedPlayer, symbol, startedAt);
+    });
+    return () => {
+      unsubscribe();
+      Object.values(reactionTimersRef.current).forEach((id) => window.clearTimeout(id));
+      reactionTimersRef.current = {};
+      setActiveReactions({});
+    };
+  }, [applyReactionEmoji]);
 
   const localPlayer = useMemo(() => {
     if (!session || !playerName) {
@@ -274,6 +346,34 @@ const OldMaidSessionPage = () => {
       setActionError(message);
     }
   };
+
+  const handleSendEmoji = async (emojiId: EmojiEffectKey) => {
+    if (!playerName) {
+      setEmojiError('Join the table before sending reactions.');
+      return;
+    }
+    const option = EMOJI_OPTIONS.find((entry) => entry.id === emojiId);
+    if (!option) {
+      return;
+    }
+    setEmojiError(null);
+    applyReactionEmoji(playerName, option.symbol);
+    try {
+      await sendOldMaidEmojiEffect(playerName, emojiId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to send reaction';
+      setEmojiError(message);
+    }
+  };
+
+  useEffect(() => {
+    if (recentTheft?.visible && recentTheft.targetId === playerName && recentTheft.cardLabel) {
+      setStolenCardFlash(recentTheft.cardLabel);
+      const timer = window.setTimeout(() => setStolenCardFlash(null), 800);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [recentTheft?.visible, recentTheft?.targetId, recentTheft?.cardLabel, playerName]);
 
   const handleCardSelect = async (cardIndex: number) => {
     if (!playerName) {
@@ -492,21 +592,17 @@ const OldMaidSessionPage = () => {
       {localPlayer ? (
         <section className={`Session-card OldMaid-handPanel ${recentDraw ? 'is-active' : ''}`}>
           <div className="OldMaid-handHeader">
-            <div>
-              <p className="OldMaid-handLabel">Your hand</p>
-              <h2>{localPlayer.displayName ?? localPlayer.name}</h2>
+            <p className="OldMaid-handLabel">Your hand</p>
+            <div className="OldMaid-handControls">
+              <button
+                type="button"
+                className="OldMaid-shuffleBtn"
+                onClick={handleShuffleHand}
+                disabled={!orderedHand.length}
+              >
+                Shuffle
+              </button>
             </div>
-            <span className="OldMaid-handCount">{orderedHand.length} card{orderedHand.length === 1 ? '' : 's'}</span>
-          </div>
-          <div className="OldMaid-handControls">
-            <button
-              type="button"
-              className="OldMaid-shuffleBtn"
-              onClick={handleShuffleHand}
-              disabled={!orderedHand.length}
-            >
-              Shuffle Hand
-            </button>
           </div>
           <div className="OldMaid-handCards">
             {orderedHand.length ? (
@@ -523,34 +619,20 @@ const OldMaidSessionPage = () => {
                   }
                   const isJoker = card.label.includes('🃏');
                   const pairMatch = Boolean(pairCardSet?.has(card.label));
+                  const stolen =
+                    recentTheft?.visible && recentTheft.targetId === playerName && recentTheft.cardLabel === card.label;
+                  const classes = [
+                    'OldMaid-handCard',
+                    'OldMaid-handCardButton',
+                    highlight ? 'is-new' : '',
+                    isJoker ? 'joker' : '',
+                    pairMatch ? 'pair-match' : '',
+                    stolen ? 'is-stolen' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
                   return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`OldMaid-handCard OldMaid-handCardButton ${highlight ? 'is-new' : ''} ${
-                        isJoker ? 'joker' : ''
-                      } ${pairMatch ? 'pair-match' : ''}
-                      } ${draggingKey === key ? 'is-dragging' : ''}`}
-                      onClick={() => handlePromoteCard(key)}
-                      draggable
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = 'move';
-                        event.dataTransfer.setData('text/plain', key);
-                        setDraggingKey(key);
-                      }}
-                      onDragEnd={() => setDraggingKey(null)}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const sourceKey =
-                          draggingKey ?? event.dataTransfer.getData('text/plain');
-                        handleReorder(sourceKey, key);
-                        setDraggingKey(null);
-                      }}
-                    >
+                    <button key={key} type="button" className={classes} onClick={() => handlePromoteCard(key)}>
                       {card.label}
                     </button>
                   );
@@ -560,17 +642,23 @@ const OldMaidSessionPage = () => {
               <p className="OldMaid-handEmpty">Safe! No cards remaining.</p>
             )}
           </div>
-          {recentDraw ? (
-            <p className="OldMaid-handMessage">
-              {recentDraw.visible ? (
-                <>
-                  You drew {recentDraw.cardLabel}
-                  {recentDraw.from ? ` from ${recentDraw.from}` : ''}
-                  {recentDraw.matched ? ' — Pair!' : ''}
-                </>
-              ) : (
-                'Drawing a card…'
-              )}
+          <div className="Session-emojiTray" role="group" aria-label="Send emoji reactions">
+            {EMOJI_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className="Session-emojiButton"
+                disabled={!playerName}
+                onClick={() => handleSendEmoji(option.id)}
+              >
+                <span aria-hidden="true">{option.symbol}</span>
+                <span className="sr-only">{option.label}</span>
+              </button>
+            ))}
+          </div>
+          {emojiError ? (
+            <p role="alert" className="Session-error centered Session-emojiError">
+              {emojiError}
             </p>
           ) : null}
         </section>
@@ -599,6 +687,8 @@ const OldMaidSessionPage = () => {
         recentTheft={recentTheft}
         offenseContext={offenseReveal ? lastDrawContext : null}
         centerOverlay={centerOverlay}
+        reactionEmojis={activeReactions}
+        stolenCardFlash={stolenCardFlash}
       />
       <section className="Session-card OldMaid-panel OldMaid-logPanel">
         <h2>Game Log</h2>
