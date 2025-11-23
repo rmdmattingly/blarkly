@@ -177,10 +177,20 @@ const OldMaidSessionPage = () => {
     if (!session || !playerName) {
       return false;
     }
-    const isSeated = session.players.some((player) => player.name === playerName);
-    const noGameInProgress = session.status !== 'active';
-    return !isSeated && noGameInProgress;
-  }, [session, playerName]);
+      const isSeated = session.players.some((player) => player.name === playerName);
+      const noGameInProgress = session.status !== 'active';
+      return !isSeated && noGameInProgress;
+    }, [session, playerName]);
+
+  const rawHandOrderSignature = useMemo(
+    () => rawHand.map((card) => card.label).join('|'),
+    [rawHand]
+  );
+
+  const serverShuffleLocked = useMemo(
+    () => shuffleServerLockUntil !== null && shuffleServerLockUntil > Date.now(),
+    [shuffleServerLockUntil]
+  );
 
   useEffect(() => {
     if (!session?.shuffleLock?.expiresAt) {
@@ -291,11 +301,8 @@ const OldMaidSessionPage = () => {
   );
 
   const shuffleLocked = useMemo(
-    () =>
-      shufflePending ||
-      shuffleAwaitingSync ||
-      (shuffleServerLockUntil !== null && shuffleServerLockUntil > Date.now()),
-    [shufflePending, shuffleAwaitingSync, shuffleServerLockUntil]
+    () => shufflePending || shuffleAwaitingSync || serverShuffleLocked,
+    [serverShuffleLocked, shuffleAwaitingSync, shufflePending]
   );
 
   useEffect(() => {
@@ -308,7 +315,7 @@ const OldMaidSessionPage = () => {
       const extras = keys.filter((key) => !preserved.includes(key));
       return [...preserved, ...extras];
     });
-    if (shuffleAwaitSignatureRef.current && rawHandSignature !== shuffleAwaitSignatureRef.current) {
+    if (shuffleAwaitSignatureRef.current && rawHandOrderSignature !== shuffleAwaitSignatureRef.current) {
       shuffleAwaitSignatureRef.current = null;
       setShuffleAwaitingSync(false);
       setShufflePending(false);
@@ -317,7 +324,7 @@ const OldMaidSessionPage = () => {
         shuffleReleaseTimerRef.current = null;
       }
     }
-  }, [rawHand, rawHandSignature]);
+  }, [rawHand, rawHandOrderSignature]);
 
   const orderedHand = useMemo(() => {
     const keyed = rawHand.map((card, idx) => ({ key: `${idx}-${card.label}`, card }));
@@ -344,7 +351,7 @@ const OldMaidSessionPage = () => {
   }, []);
 
   const handleShuffleHand = useCallback(async () => {
-    if (!playerName || shufflePending || shuffleAwaitingSync) {
+    if (!playerName || shufflePending || shuffleAwaitingSync || serverShuffleLocked) {
       return;
     }
     if (!orderedHand.length) {
@@ -353,7 +360,7 @@ const OldMaidSessionPage = () => {
     setShufflePending(true);
     setShuffleAwaitingSync(true);
     setShuffleError(null);
-    shuffleAwaitSignatureRef.current = rawHandSignature;
+    shuffleAwaitSignatureRef.current = rawHandOrderSignature;
     if (shuffleReleaseTimerRef.current) {
       window.clearTimeout(shuffleReleaseTimerRef.current);
     }
@@ -378,7 +385,7 @@ const OldMaidSessionPage = () => {
       setShuffleAwaitingSync(false);
       setShufflePending(false);
     }
-  }, [applyReactionEmoji, orderedHand, playerName, rawHandSignature, shuffleAwaitingSync, shufflePending]);
+  }, [applyReactionEmoji, orderedHand, playerName, rawHandOrderSignature, serverShuffleLocked, shuffleAwaitingSync, shufflePending]);
 
   const activeDrawerLabel = formatPlayerLabel(activePlayer ?? undefined);
 
