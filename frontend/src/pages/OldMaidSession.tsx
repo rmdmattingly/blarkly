@@ -25,8 +25,8 @@ const DRAW_REVEAL_DELAY_MS = 800;
 const DRAW_RESULT_DISPLAY_MS = 2800;
 const DEFENSE_REVEAL_DELAY_MS = 600;
 const DEFENSE_RESULT_DISPLAY_MS = 2400;
-const CLIENT_SHUFFLE_LOCK_MS = 5200;
-const SHUFFLE_PENDING_FALLBACK_MS = 4200;
+const SHUFFLE_PENDING_FALLBACK_MS = 6000;
+const SHUFFLE_LOCK_NUDGE_MS = 900;
 
 type TheftReveal = {
   cardLabel: string;
@@ -70,29 +70,14 @@ const OldMaidSessionPage = () => {
   const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
   const shuffleAwaitSignatureRef = useRef<string | null>(null);
   const shuffleReleaseTimerRef = useRef<number | null>(null);
-  const shuffleLockTimerRef = useRef<number | null>(null);
-  const [shuffleLockedUntil, setShuffleLockedUntil] = useState<number | null>(null);
+  const shuffleCooldownTimerRef = useRef<number | null>(null);
+  const [shuffleAwaitingSync, setShuffleAwaitingSync] = useState(false);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [shufflePending, setShufflePending] = useState(false);
   const rejoinInFlightRef = useRef(false);
   const storedDisplayNameRef = useRef<string | null>(readStoredDisplayName() ?? null);
 
   usePresence(playerName || null, Boolean(session), reportOldMaidPresence);
-
-  const applyClientShuffleLock = useCallback(
-    (ttlMs: number) => {
-      const expiresAt = Date.now() + ttlMs;
-      setShuffleLockedUntil(expiresAt);
-      if (shuffleLockTimerRef.current) {
-        window.clearTimeout(shuffleLockTimerRef.current);
-      }
-      shuffleLockTimerRef.current = window.setTimeout(() => {
-        setShuffleLockedUntil(null);
-        shuffleLockTimerRef.current = null;
-      }, ttlMs);
-    },
-    []
-  );
 
   const clearReactionEmoji = useCallback((player: string) => {
     setActiveReactions((prev) => {
@@ -293,10 +278,7 @@ const OldMaidSessionPage = () => {
     [rawHand]
   );
 
-  const shuffleLocked = useMemo(
-    () => shuffleLockedUntil !== null && shuffleLockedUntil > Date.now(),
-    [shuffleLockedUntil]
-  );
+  const shuffleLocked = shufflePending || shuffleAwaitingSync;
 
   useEffect(() => {
     const keys = rawHand.map((card, idx) => `${idx}-${card.label}`);
@@ -308,6 +290,15 @@ const OldMaidSessionPage = () => {
       const extras = keys.filter((key) => !preserved.includes(key));
       return [...preserved, ...extras];
     });
+    if (shuffleAwaitSignatureRef.current && rawHandSignature !== shuffleAwaitSignatureRef.current) {
+      shuffleAwaitSignatureRef.current = null;
+      setShuffleAwaitingSync(false);
+      setShufflePending(false);
+      if (shuffleReleaseTimerRef.current) {
+        window.clearTimeout(shuffleReleaseTimerRef.current);
+        shuffleReleaseTimerRef.current = null;
+      }
+    }
   }, [rawHand, rawHandSignature]);
 
   const orderedHand = useMemo(() => {
@@ -335,14 +326,14 @@ const OldMaidSessionPage = () => {
   }, []);
 
   const handleShuffleHand = useCallback(async () => {
-    const lockActive = shuffleLockedUntil !== null && shuffleLockedUntil > Date.now();
-    if (!playerName || shufflePending || lockActive) {
+    if (!playerName || shufflePending || shuffleAwaitingSync) {
       return;
     }
     if (!orderedHand.length) {
       return;
     }
     setShufflePending(true);
+    setShuffleAwaitingSync(true);
     setShuffleError(null);
     shuffleAwaitSignatureRef.current = rawHandSignature;
     if (shuffleReleaseTimerRef.current) {
@@ -352,23 +343,31 @@ const OldMaidSessionPage = () => {
       const result = await shuffleOldMaidHand(playerName);
       if (result === 'ok') {
         applyReactionEmoji(playerName, '🔀', Date.now(), 2000);
-        applyClientShuffleLock(CLIENT_SHUFFLE_LOCK_MS);
         shuffleReleaseTimerRef.current = window.setTimeout(() => {
           shuffleAwaitSignatureRef.current = null;
+          setShuffleAwaitingSync(false);
           setShufflePending(false);
         }, SHUFFLE_PENDING_FALLBACK_MS);
       } else {
-        applyClientShuffleLock(CLIENT_SHUFFLE_LOCK_MS);
+        // Locked upstream: briefly dampen spam then allow retry.
+        if (shuffleCooldownTimerRef.current) {
+          window.clearTimeout(shuffleCooldownTimerRef.current);
+        }
+        shuffleCooldownTimerRef.current = window.setTimeout(() => {
+          setShuffleAwaitingSync(false);
+          setShufflePending(false);
+          shuffleCooldownTimerRef.current = null;
+        }, SHUFFLE_LOCK_NUDGE_MS);
         shuffleAwaitSignatureRef.current = null;
-        setShufflePending(false);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to shuffle right now';
       setShuffleError(message);
       shuffleAwaitSignatureRef.current = null;
+      setShuffleAwaitingSync(false);
       setShufflePending(false);
     }
-  }, [applyClientShuffleLock, applyReactionEmoji, orderedHand, playerName, rawHandSignature, shuffleLockedUntil, shufflePending]);
+  }, [applyReactionEmoji, orderedHand, playerName, rawHandSignature, shuffleAwaitingSync, shufflePending]);
 
   const activeDrawerLabel = formatPlayerLabel(activePlayer ?? undefined);
 
@@ -643,8 +642,8 @@ const OldMaidSessionPage = () => {
       if (shuffleReleaseTimerRef.current) {
         window.clearTimeout(shuffleReleaseTimerRef.current);
       }
-      if (shuffleLockTimerRef.current) {
-        window.clearTimeout(shuffleLockTimerRef.current);
+      if (shuffleCooldownTimerRef.current) {
+        window.clearTimeout(shuffleCooldownTimerRef.current);
       }
     };
   }, []);
@@ -796,7 +795,7 @@ const OldMaidSessionPage = () => {
         reactionEmojis={activeReactions}
         onShuffleLocalHand={drawMode === 'defense' ? handleShuffleHand : undefined}
         shuffleLocked={shuffleLocked}
-        shufflePending={shufflePending}
+        shufflePending={shufflePending || shuffleAwaitingSync}
         shuffleError={drawMode === 'defense' ? shuffleError : null}
       />
       <section className="Session-card OldMaid-panel OldMaid-logPanel">
