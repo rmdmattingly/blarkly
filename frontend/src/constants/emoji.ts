@@ -5,8 +5,8 @@ export type EmojiEffectKey =
   | 'crying'
   | 'sweating'
   | 'uhoh'
-  | 'thinking'
-  | 'angry'
+  | 'higher'
+  | 'lower'
   | 'old_woman';
 
 export interface EmojiOption {
@@ -27,13 +27,13 @@ export interface EmojiEffectEntry {
 
 export const EMOJI_OPTIONS_HIGHLOW: EmojiOption[] = [
   { id: 'thumbs_up', label: 'Thumbs up', symbol: '👍' },
-  { id: 'high_five', label: 'High five', symbol: '🙌' },
+  { id: 'high_five', label: 'High five', symbol: '✋' },
   { id: 'laughing', label: 'Laughing', symbol: '😂' },
   { id: 'crying', label: 'Crying', symbol: '😭' },
   { id: 'sweating', label: 'Sweating', symbol: '😅' },
   { id: 'uhoh', label: 'Uh oh', symbol: '🫠' },
-  { id: 'thinking', label: 'Thinking', symbol: '🤔' },
-  { id: 'angry', label: 'Angry', symbol: '😡' },
+  { id: 'higher', label: 'Higher', symbol: '👆' },
+  { id: 'lower', label: 'Lower', symbol: '👇' },
 ];
 
 export const EMOJI_OPTIONS_OLDMAID: EmojiOption[] = [
@@ -42,6 +42,6 @@ export const EMOJI_OPTIONS_OLDMAID: EmojiOption[] = [
   { id: 'crying', label: 'Crying', symbol: '😭' },
   { id: 'sweating', label: 'Sweating', symbol: '😅' },
   { id: 'uhoh', label: 'Uh oh', symbol: '🫠' },
-  { id: 'thinking', label: 'Thinking', symbol: '🤔' },
-  { id: 'angry', label: 'Angry', symbol: '😡' },
+  { id: 'higher', label: 'Higher', symbol: '👆' },
+  { id: 'lower', label: 'Lower', symbol: '👇' },
 ];
