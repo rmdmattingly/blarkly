@@ -25,6 +25,7 @@ const DRAW_REVEAL_DELAY_MS = 800;
 const DRAW_RESULT_DISPLAY_MS = 2800;
 const DEFENSE_REVEAL_DELAY_MS = 600;
 const DEFENSE_RESULT_DISPLAY_MS = 2400;
+const CLIENT_SHUFFLE_LOCK_MS = 5200;
 
 type TheftReveal = {
   cardLabel: string;
@@ -68,6 +69,8 @@ const OldMaidSessionPage = () => {
   const [activeReactions, setActiveReactions] = useState<Record<string, { symbol: string; startedAt: number; duration: number }>>({});
   const shuffleAwaitSignatureRef = useRef<string | null>(null);
   const shuffleReleaseTimerRef = useRef<number | null>(null);
+  const shuffleLockTimerRef = useRef<number | null>(null);
+  const [shuffleLockedUntil, setShuffleLockedUntil] = useState<number | null>(null);
   const [shuffleError, setShuffleError] = useState<string | null>(null);
   const [shufflePending, setShufflePending] = useState(false);
   const rejoinInFlightRef = useRef(false);
@@ -274,6 +277,11 @@ const OldMaidSessionPage = () => {
     [rawHand]
   );
 
+  const shuffleLocked = useMemo(
+    () => shuffleLockedUntil !== null && shuffleLockedUntil > Date.now(),
+    [shuffleLockedUntil]
+  );
+
   useEffect(() => {
     const keys = rawHand.map((card, idx) => `${idx}-${card.label}`);
     setHandOrder((prev) => {
@@ -311,7 +319,8 @@ const OldMaidSessionPage = () => {
   }, []);
 
   const handleShuffleHand = useCallback(async () => {
-    if (!playerName || shufflePending) {
+    const lockActive = shuffleLockedUntil !== null && shuffleLockedUntil > Date.now();
+    if (!playerName || shufflePending || lockActive) {
       return;
     }
     if (!orderedHand.length) {
@@ -332,6 +341,15 @@ const OldMaidSessionPage = () => {
           setShufflePending(false);
         }, 3000);
       } else {
+        const lockExpires = Date.now() + CLIENT_SHUFFLE_LOCK_MS;
+        setShuffleLockedUntil(lockExpires);
+        if (shuffleLockTimerRef.current) {
+          window.clearTimeout(shuffleLockTimerRef.current);
+        }
+        shuffleLockTimerRef.current = window.setTimeout(() => {
+          setShuffleLockedUntil(null);
+          shuffleLockTimerRef.current = null;
+        }, CLIENT_SHUFFLE_LOCK_MS);
         shuffleAwaitSignatureRef.current = null;
         setShufflePending(false);
       }
@@ -341,7 +359,7 @@ const OldMaidSessionPage = () => {
       shuffleAwaitSignatureRef.current = null;
       setShufflePending(false);
     }
-  }, [applyReactionEmoji, orderedHand, playerName, rawHandSignature, shufflePending]);
+  }, [applyReactionEmoji, orderedHand, playerName, rawHandSignature, shuffleLockedUntil, shufflePending]);
 
   const activeDrawerLabel = formatPlayerLabel(activePlayer ?? undefined);
 
@@ -492,6 +510,11 @@ const OldMaidSessionPage = () => {
         shuffleReleaseTimerRef.current = null;
       }
       setShufflePending(false);
+      if (shuffleLockTimerRef.current) {
+        window.clearTimeout(shuffleLockTimerRef.current);
+        shuffleLockTimerRef.current = null;
+      }
+      setShuffleLockedUntil(null);
     }
     const prev = previousSessionRef.current;
     if (prev) {
@@ -616,6 +639,9 @@ const OldMaidSessionPage = () => {
       if (shuffleReleaseTimerRef.current) {
         window.clearTimeout(shuffleReleaseTimerRef.current);
       }
+      if (shuffleLockTimerRef.current) {
+        window.clearTimeout(shuffleLockTimerRef.current);
+      }
     };
   }, []);
 
@@ -671,7 +697,7 @@ const OldMaidSessionPage = () => {
                 type="button"
                 className="OldMaid-shuffleBtn"
                 onClick={handleShuffleHand}
-                disabled={!orderedHand.length || shufflePending}
+                disabled={!orderedHand.length || shufflePending || shuffleLocked}
               >
                 {shufflePending ? 'Shuffling…' : 'Shuffle'}
               </button>
